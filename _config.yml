@@ -18,10 +18,9 @@
 # You can create any custom variable you would like, and they will be accessible
 # in the templates via {{ site.myvariable }}.
 
-title: My Personal Blog 
-email: subhrm@github.com
+title: Subhendu's Blog 
 description: >- # this means to ignore newlines until "baseurl:"
-  I plan to document various Algorithms, Libraies, Tools and Techniques 
+  I plan to document various algorithms, libraies, tools and techniques 
   in this blog for the benefit of future me. 
   My areas of interest : Machine Learning, Deep Learning, Image Processing, Audio Processing,
   Algorithms, Data Visualization, Graph Theory
