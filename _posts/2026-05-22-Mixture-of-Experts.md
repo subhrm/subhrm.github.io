@@ -6,7 +6,7 @@ categories: llm
 ---
 # Mixture of Experts (MoE) Models: A Comprehensive Technical Report
 
-This comprehensive, technically rigorous report synthesizes mathematical, algorithmic, and systems-level breakthroughs in sparsely-gated Mixture of Experts (MoE) models. Spanning ten detailed sections compiled using specialized expert subagents, this document traces the trajectory of conditional computation from foundational scaling theory to state-of-the-art production architectures, training stability mechanics, distributed parallelisms, dropless block-sparse GPU kernels, and KV-cache optimization guides.
+This report covers mathematical, algorithmic, and systems-level breakthroughs in Mixture of Experts (MoE) models. 
 
 ## Table of Contents
 
