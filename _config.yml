@@ -33,6 +33,14 @@ github_username:  subhrm
 theme: minima
 plugins:
   - jekyll-feed
+  - jekyll-diagrams
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  math_engine: mathjax
+  parse_block_html: true
+  hard_wrap: false
 
 # Exclude from processing.
 # The following items will not be processed, by default.
