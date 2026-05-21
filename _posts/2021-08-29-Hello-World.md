@@ -2,7 +2,7 @@
 layout: post
 title:  "Hello World!"
 date:   2021-08-29 18:08:23 +0530
-categories: jekyll 
+categories: post 
 ---
 
 Hello World!

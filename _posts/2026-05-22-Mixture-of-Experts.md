@@ -2,7 +2,7 @@
 layout: post
 title:  "Mixture of Experts (MoE) Models: A Comprehensive Technical Report"
 date:   2026-05-22 01:05:00 +0530
-categories: transformers, llm, moe, mixture-of-experts 
+categories: llm
 ---
 # Mixture of Experts (MoE) Models: A Comprehensive Technical Report
 
@@ -23,7 +23,7 @@ This comprehensive, technically rigorous report synthesizes mathematical, algori
 
 ---
 
-# Section 1: Introduction and Theoretical Foundations of Mixture of Experts (MoE)
+# Section 1: Introduction and Theoretical Foundations of Mixture of Experts (MoE) {#section-1-introduction-and-theoretical-foundations-of-mixture-of-experts-moe}
 
 Mixture of Experts (MoE) architecture represents a pivotal paradigm shift in deep learning. Traditional neural networks operate under a **dense compute paradigm**, where every parameter in the model is activated for every input token. In contrast, MoE introduces the **sparse compute paradigm** via conditional computation, decoupling the parameter capacity of a network from its computational budget per forward pass.
 
@@ -455,7 +455,7 @@ During the fine-tuning of pre-trained MoE models on smaller downstream datasets 
 ---
 
 
-# Section 2: Token-Choice Routing: Mechanics, Scaling, and Key Limitations
+# Section 2: Token-Choice Routing: Mechanics, Scaling, and Key Limitations {#section-2-token-choice-routing-mechanics-scaling-and-key-limitations}
 
 Sparsely-activated Mixture-of-Experts (MoE) layers replace traditional dense Feed-Forward Networks (FFNs) in Transformer architectures, scaling parameter capacity by several orders of magnitude while maintaining near-constant floating-point operations (FLOPs) per token. The critical engine enabling this decoupling of parameter capacity from compute cost is the **Routing (Gating) Network**. This section provides a mathematically rigorous formulation of token-choice routing, explores the landmark Switch routing ($k=1$) simplification, details the systems-level execution and balancing mechanics, and addresses the fundamental scaling limitations of this paradigm.
 
@@ -747,7 +747,7 @@ The table below provides a detailed structural comparison of the four key routin
 ---
 
 
-# Section 3: Alternative Gating Paradigms: Expert-Choice Routing
+# Section 3: Alternative Gating Paradigms: Expert-Choice Routing {#section-3-alternative-gating-paradigms-expert-choice-routing}
 
 ## 3.1 Paradigm Shift: Token-Choice vs. Expert-Choice
 
@@ -995,7 +995,7 @@ While ECR solves the computational inefficiencies (FLOPS) and load imbalances of
 ---
 
 
-# Section 4: Differentiable and Continuous Gating: Soft MoE
+# Section 4: Differentiable and Continuous Gating: Soft MoE {#section-4-differentiable-and-continuous-gating-soft-moe}
 
 Sparse Mixture of Experts (MoE) architectures traditionally rely on discrete routing mechanisms, such as Token Choice gating ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)) or Expert Choice gating ([Zhou et al. 2022](https://arxiv.org/abs/2202.09368)), to scale model capacity while maintaining a constant computational budget per token. However, these hard routing algorithms introduce severe optimization, algorithmic, and engineering challenges—including training instability, token dropping, expert load imbalance, and non-differentiable operations.
 
@@ -1357,7 +1357,7 @@ Fitting 54B parameters in GPU/TPU memory requires sharding parameters across mul
 ---
 
 
-# Section 5: DeepSeekMoE and Hybrid Architectures: Shared & Specialized Experts
+# Section 5: DeepSeekMoE and Hybrid Architectures: Shared & Specialized Experts {#section-5-deepseekmoe-and-hybrid-architectures-shared-specialized-experts}
 
 Mixture of Experts (MoE) architectures have emerged as the dominant paradigm for scaling the parameter capacity of Large Language Models (LLMs) without a proportional increase in computational cost ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)). However, conventional Sparse MoE architectures, such as GShard ([Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668)) and Switch Transformers ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)), suffer from two severe fundamental challenges: **knowledge redundancy** and **routing collapse / parameter under-utilization**. 
 
@@ -1756,7 +1756,7 @@ The mathematical and empirical success of DeepSeekMoE's shared & specialized exp
 ---
 
 
-# Section 6: Load Balancing, Router Regularization, and Training Stability
+# Section 6: Load Balancing, Router Regularization, and Training Stability {#section-6-load-balancing-router-regularization-and-training-stability}
 
 Sparsely-Gated Mixture-of-Experts (MoE) models represent a paradigm shift in deep learning scaling, enabling models to absorb trillions of parameters at near-constant computational cost per token. However, this capacity expansion introduces major optimization challenges. Unlike dense architectures, where gradient flow is continuous and uniform across all parameters, sparse MoE architectures rely on dynamic, discrete routing decisions. This dynamic routing introduces three fundamental issues:
 1. **Load Imbalance**: The gating network naturally tends to converge to a degenerate state where a tiny subset of "favorite" experts receives the vast majority of tokens. This creates a self-reinforcing feedback loop—favored experts are updated more frequently and become highly specialized, while other experts remain under-trained and under-utilized.
@@ -2129,7 +2129,7 @@ $$\sigma = 0.1 \times \sqrt{\frac{1}{n_{\text{in}}}}$$
 ---
 
 
-# Section 7: Systems & Distributed Compilation at Scale: GShard and Expert Parallelism
+# Section 7: Systems & Distributed Compilation at Scale: GShard and Expert Parallelism {#section-7-systems-distributed-compilation-at-scale-gshard-and-expert-parallelism}
 
 In the pursuit of scaling deep learning architectures, dense models eventually hit a hard wall of physical hardware constraints. A single modern accelerator is restricted by its high-bandwidth memory (HBM) capacity, typically limiting the parameter size of a standard dense model to under 10–20 billion parameters without employing model parallel strategies. 
 
@@ -2603,7 +2603,7 @@ The table below contrasts the end-to-end training efficiency of different scaled
 ---
 
 
-# Section 8: Overcoming Systems Waste: Dropless Sparse Kernels & MegaBlocks
+# Section 8: Overcoming Systems Waste: Dropless Sparse Kernels & MegaBlocks {#section-8-overcoming-systems-waste-dropless-sparse-kernels-megablocks}
 
 Sparsely-gated Mixture-of-Experts (MoE) architectures offer a powerful mechanism to scale the capacity of Deep Learning models without a proportional increase in computational cost. However, executing these models efficiently on modern hardware accelerators (such as GPUs and TPUs) is a major systems challenge. Because deep learning frameworks are highly optimized for dense, regular computation, the dynamic routing and load imbalance inherent in MoEs introduce severe performance bottlenecks.
 
@@ -2998,7 +2998,7 @@ On average, MegaBlocks' block-sparse kernels realize **98.6% of the throughput o
 ---
 
 
-# Section 9: Mixtral, DeepSeek-V2, and Modern Production MoE LLMs
+# Section 9: Mixtral, DeepSeek-V2, and Modern Production MoE LLMs {#section-9-mixtral-deepseek-v2-and-modern-production-moe-llms}
 
 The Mixture of Experts (MoE) architecture has evolved from a theoretical framework for scaling model capacity to the dominant architectural paradigm for state-of-the-art production Large Language Models (LLMs). Early MoE research focused on solving training instability and demonstrating basic scaling laws on synthetic or translation tasks. In contrast, modern modern production MoEs—such as **Mixtral 8x7B** ([Jiang et al. 2024](https://arxiv.org/abs/2401.04088)) and **DeepSeek-V2** ([DeepSeek-AI 2024](https://arxiv.org/abs/2405.04434))—have successfully optimized sparse scaling to deliver superior compute efficiency, drastically reduced serving overheads, and state-of-the-art general capabilities.
 
@@ -3412,7 +3412,7 @@ Under Expert Parallelism, tokens are routed across accelerators using `AllToAll`
 ---
 
 
-# Section 10: A Comprehensive Synthesis & Structural Comparison of MoE Architectures
+# Section 10: A Comprehensive Synthesis & Structural Comparison of MoE Architectures {#section-10-a-comprehensive-synthesis-structural-comparison-of-moe-architectures}
 
 Mixture of Experts (MoE) architectures represent one of the most successful paradigms for scaling deep learning models, enabling model capacity to scale sublinearly with active computational cost. However, the design space of sparse models is highly multi-dimensional, spanning routing algorithms, capacity management, load-balancing losses, and system parallelization. This section provides a unified, mathematically rigorous synthesis and a detailed engineering comparison of the ten landmark MoE architectures that have defined the sparse deep learning revolution from 2017 to the present.
 
