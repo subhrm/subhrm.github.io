@@ -4,9 +4,9 @@ title:  "Mixture of Experts (MoE) Models: A Comprehensive Technical Report"
 date:   2026-05-22 01:05:00 +0530
 categories: llm
 ---
-# Mixture of Experts (MoE) Models: A Comprehensive Technical Report
+# Mixture of Experts (MoE) Models: A Technical Report
 
-This report covers mathematical, algorithmic, and systems-level breakthroughs in Mixture of Experts (MoE) models. 
+This report covers mathematical, algorithmic, and systems-level breakthroughs in sparsely-gated Mixture of Experts (MoE) models. This document traces the trajectory of conditional computation from foundational scaling theory to state-of-the-art production architectures, training stability mechanics, distributed parallelisms, dropless block-sparse GPU kernels, and KV-cache optimization guides.
 
 ## Table of Contents
 
@@ -18,12 +18,11 @@ This report covers mathematical, algorithmic, and systems-level breakthroughs in
 - [Section 6: Load Balancing, Router Regularization, and Training Stability](#section-6-load-balancing-router-regularization-and-training-stability)
 - [Section 7: Systems & Distributed Compilation at Scale: GShard and Expert Parallelism](#section-7-systems-distributed-compilation-at-scale-gshard-and-expert-parallelism)
 - [Section 8: Overcoming Systems Waste: Dropless Sparse Kernels & MegaBlocks](#section-8-overcoming-systems-waste-dropless-sparse-kernels-megablocks)
-- [Section 9: Mixtral, DeepSeek-V2, and Modern Production MoE LLMs](#section-9-mixtral-deepseek-v2-and-modern-production-moe-llms)
-- [Section 10: A Comprehensive Synthesis & Structural Comparison of MoE Architectures](#section-10-a-comprehensive-synthesis-structural-comparison-of-moe-architectures)
+- [Section 9: Production MoE LLMs, Synthesis & Structural Comparison](#section-9-production-moe-llms-synthesis--structural-comparison)
 
 ---
 
-# Section 1: Introduction and Theoretical Foundations of Mixture of Experts (MoE) {#section-1-introduction-and-theoretical-foundations-of-mixture-of-experts-moe}
+# Section 1: Introduction and Theoretical Foundations of Mixture of Experts (MoE)
 
 Mixture of Experts (MoE) architecture represents a pivotal paradigm shift in deep learning. Traditional neural networks operate under a **dense compute paradigm**, where every parameter in the model is activated for every input token. In contrast, MoE introduces the **sparse compute paradigm** via conditional computation, decoupling the parameter capacity of a network from its computational budget per forward pass.
 
@@ -31,7 +30,7 @@ This section details the historical context of conditional computation, mathemat
 
 ---
 
-## 1. Historical Context of Conditional Computation
+## 1.1 Historical Context of Conditional Computation
 
 The concept of conditional computation—activating distinct subnetworks dynamically on a per-example or per-token basis—has a rich history aimed at overcoming the hardware and data-scaling bottlenecks of deep learning.
 
@@ -44,7 +43,7 @@ graph TD
     E -->|Simplify Routing & Stabilization| F["Switch Transformers<br>(Fedus et al. 2021)"]
 ```
 
-### 1.1 The Classical MoE Foundations (1991–2013)
+### 1.1.1 The Classical MoE Foundations (1991–2013)
 The Mixture of Experts paradigm originated in the early 1990s with the work of [Jacobs et al. 1991](https://arxiv.org/abs/1701.06538) and was extended to hierarchical structures by [Jordan & Jacobs 1994](https://arxiv.org/abs/1701.06538). In these early architectures:
 *   The MoE acted as a global ensembling model where a central gating network calculated softmax probabilities to weight the outputs of a set of localized experts.
 *   The entire system was trained jointly via gradient descent or the Expectation-Maximization (EM) algorithm.
@@ -52,32 +51,32 @@ The Mixture of Experts paradigm originated in the early 1990s with the work of [
 
 The first attempt to stack multiple MoE layers deep within a neural network was proposed by [Eigen et al. 2013](https://arxiv.org/abs/1701.06538), who introduced the *Deep Factored MoE*. While they succeeded in using stacked MoEs inside convolutional and feed-forward networks, their model activated **all** experts to some degree (non-sparse, dense gating), which did not yield the computational savings required to justify the massive parameter overhead.
 
-### 1.2 The Bottlenecks of Early Sparsity
+### 1.1.2 The Bottlenecks of Early Sparsity
 Prior to 2017, multiple conditional computation schemes were proposed (e.g., binary stochastic gates, reinforcement learning-based routers, and block-wise dropout) by researchers like Bengio et al. However, these models failed to demonstrate wall-clock speedups or massive capacity scaling in practice. The field was stalled by several fundamental challenges:
 1.  **Hardware Branching Latency:** GPUs and modern accelerators are optimized for high-throughput, regular, and dense matrix arithmetic. Conditional computation introduces dynamic branching, leading to divergent execution paths that severely underutilize SIMD (Single Instruction, Multiple Data) architectures.
 2.  **The Shrinking Batch Problem:** As a batch is dynamically routed among $N$ experts, the effective batch size routed to each individual expert shrinks proportionally. Small batch sizes fail to amortize the latency of memory access, degrading arithmetic intensity (FLOPs per byte of memory transfer) and causing the experts to execute in memory-bandwidth-bound regimes.
 3.  **Inter-Device Bandwidth Bottlenecks:** Distributing experts across a cluster requires sending intermediate representations across the network. If the computational cost of the expert is low relative to the size of the tensor being routed, inter-device network bandwidth becomes the primary bottleneck, neutralizing the benefits of parallelization.
 4.  **Training Instabilities and Load Imbalance:** Trainable gating networks naturally converge to a pathological "rich-get-richer" state. A few highly-performing experts receive a disproportionate share of the tokens, accelerating their specialization, while the remaining experts remain undertrained and underutilized.
 
-### 1.3 The Sparse MoE Breakthrough (2017)
+### 1.1.3 The Sparse MoE Breakthrough (2017)
 The breakthrough that realized the promise of conditional computation was the *Sparsely-Gated Mixture-of-Experts Layer* by [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538). They successfully scaled models to over 137 billion parameters with high computational efficiency on GPU clusters by:
 *   Embedding the MoE layer convolutionally between recurrent (LSTM) layers, executing gating decisions independently at each sequence token position.
 *   Introducing **Noisy Top-K Gating** to inject tunable Gaussian noise into the router logits. This noise allowed the model to explore routing pathways, smoothing the non-differentiable $k$-selection and preventing early expert collapse.
 *   Defining global **importance-weighting** and **load-balancing** auxiliary losses to enforce uniform resource utilization.
 *   Addressing the shrinking batch problem by combining data-parallel and model-parallel paradigms, grouping tokens from multiple data replicas before dispatching them synchronously to expert shards.
 
-### 1.4 Modern Evolution: GShard and Switch Transformers
+### 1.1.4 Modern Evolution: GShard and Switch Transformers
 While Shazeer et al. established sparse MoE within recurrent networks, the architecture was scaled to gargantuan limits within the Transformer framework by:
 *   **GShard ([Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668)):** Scaled Transformer models beyond 600 billion parameters. GShard replaced every other Feed-Forward Network (FFN) layer of the Transformer with a Position-wise MoE layer using a refined **Top-2 gating** mechanism. They pioneered **Single Program Multiple Data (SPMD)** compiler-level partitioning via XLA, abstracting device-specific communication away from model definition.
 *   **Switch Transformers ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)):** Simplified routing by using **Top-1 gating (Switch Routing)**. They proved that routing to a single expert preserves model quality while dramatically reducing router computation, halving expert capacity buffers, and slashing cross-device communication volume. They also introduced key stabilization techniques like **selective precision** and **reduced initialization scale**, making the training of trillion-parameter sparse models stable in lower-precision (bfloat16) formats.
 
 ---
 
-## 2. Scaling Dynamics: Active vs. Total Parameters
+## 1.2 Scaling Dynamics: Active vs. Total Parameters
 
 The core mathematical appeal of MoE models lies in their ability to scale capacity sublinearly with computational cost. We formalize this by defining the difference between **Total Parameters ($P_{\text{total}}$)** and **Active Parameters ($P_{\text{active}}$)**.
 
-### 2.1 Parameter Formulations in Transformers
+### 1.2.1 Parameter Formulations in Transformers
 Consider a standard dense Transformer layer with hidden dimension $d_{\text{model}}$ and an intermediate FFN dimension $d_{\text{ff}}$ (typically $d_{\text{ff}} = 4 \cdot d_{\text{model}}$). The FFN block consists of two linear projections:
 $$h = \text{Activation}\left(X \cdot W_1 + b_1\right)$$
 $$Y = h \cdot W_2 + b_2$$
@@ -108,18 +107,18 @@ Sparsely-Gated MoE Transformer Layer FFN:
 
 The router network parameters $W_r \in \mathbb{R}^{d_{\text{model}} \times E}$ are negligible in scale. Therefore, the parameter counts are formulated as follows:
 
-#### Total Parameters ($P_{\text{total}}$)
+#### 1.2.1.1 Total Parameters ($P_{\text{total}}$)
 The total parameters in the MoE layer represent the storage footprint required in memory (SRAM or HBM across devices):
 $$P_{\text{total}} = E \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx E \cdot P_{\text{dense\_FFN}}$$
 
-#### Active Parameters ($P_{\text{active}}$)
+#### 1.2.1.2 Active Parameters ($P_{\text{active}}$)
 The active parameters represent the subset of weights executed per individual token during the forward pass:
 $$P_{\text{active}} = k \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx k \cdot P_{\text{dense\_FFN}}$$
 Where $k$ is the number of experts activated per token ($k \ll E$). 
 
 When scaling the model by increasing the number of experts $E$, $P_{\text{total}}$ scales **linearly** with $E$, whereas $P_{\text{active}}$ remains virtually **constant**.
 
-### 2.2 Mathematical Complexity and FLOPs
+### 1.2.2 Mathematical Complexity and FLOPs
 Let $N$ be the sequence length (number of tokens in the batch). The computational complexity of the dense and MoE FFN layers can be formalized in terms of floating-point operations (FLOPs). Assuming 2 FLOPs per multiply-accumulate operation:
 
 $$\text{FLOPs}_{\text{dense}} = 2 \cdot N \cdot P_{\text{dense\_FFN}} = 4 \cdot N \cdot d_{\text{model}} \cdot d_{\text{ff}}$$
@@ -131,7 +130,7 @@ $$\text{FLOPs}_{\text{MoE}} \approx 2 \cdot k \cdot N \cdot P_{\text{dense\_FFN}
 
 For $k=1$ (Switch Transformer), the computational complexity per token of a sparse MoE model with hundreds of billions of total parameters is mathematically identical to a small dense model containing only a single expert's worth of parameters.
 
-### 2.3 Empirical Scaling Laws and the Pareto Frontier
+### 1.2.3 Empirical Scaling Laws and the Pareto Frontier
 Empirical results from [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538), [Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668), and [Fedus et al. 2021](https://arxiv.org/abs/2101.03961) demonstrate that scaling parameters sparsely yields a dramatic shift in the Pareto frontier of quality vs. compute cost:
 
 1.  **Sample Efficiency on a Step-Basis:** For a fixed training step budget, sparse models achieve significantly lower perplexity (loss) than dense baseline counterparts. As shown in the Switch Transformer experiments:
@@ -142,7 +141,7 @@ Empirical results from [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538), 
 
 ---
 
-## 3. Core Architectural Components of MoE Models
+## 1.3 Core Architectural Components of MoE Models
 
 An MoE layer is comprised of three essential pillars: the gating routing network, the partitioned expert neural networks, and the load-balancing optimization framework.
 
@@ -179,16 +178,16 @@ An MoE layer is comprised of three essential pillars: the gating routing network
             └───────────────────────────────────┘
 ```
 
-### 3.1 Gating Network (The Router) Mathematical Formulations
+### 1.3.1 Gating Network (The Router) Mathematical Formulations
 
 The router maps an input representation $x \in \mathbb{R}^{d_{\text{model}}}$ to a sparse probability distribution $G(x) \in \mathbb{R}^E$. We detail the evolution of these gating functions:
 
-#### 3.1.1 Classic Softmax Gating (Non-Sparse)
+#### 1.3.1.1 Classic Softmax Gating (Non-Sparse)
 The simplest gating mechanism applies a parameterized projection followed by a softmax activation:
 $$G_{\sigma}(x) = \text{Softmax}(x \cdot W_r)$$
 This results in a dense routing vector where $G_{\sigma}(x)_i > 0$ for all experts. It offers no computational savings, as all $E$ experts must be evaluated.
 
-#### 3.1.2 Noisy Top-K Gating
+#### 1.3.1.2 Noisy Top-K Gating
 To enforce sparsity while maintaining a differentiable formulation, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) introduced noisy top-$k$ gating:
 $$H(x)_i = (x \cdot W_r)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)$$
 Where $W_r, W_{\text{noise}} \in \mathbb{R}^{d_{\text{model}} \times E}$, and $\epsilon \sim \mathcal{N}(0, 1)$ is standard Gaussian noise drawn independently per step. The routing vector is defined by keeping only the top-$k$ pre-activation elements and setting the rest to $-\infty$:
@@ -196,7 +195,7 @@ $$\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the 
 $$G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right)$$
 *   **Gradient Flow:** If $k > 1$ (e.g., $k=2$), the gating weights $W_r$ receive active gradients because the gate outputs for the top-$k$ experts are continuously dependent on the inputs and weights via the softmax function. Gradients backpropagate directly through the gating network to the preceding layers.
 
-#### 3.1.3 GShard Top-2 Gating with Capacity Constraints
+#### 1.3.1.3 GShard Top-2 Gating with Capacity Constraints
 [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668) enforces a group-level parallel Top-2 routing strategy to ensure deterministic behavior on massive TPU clusters. Given a group of tokens $x_S$ of size $S$:
 1.  Calculate standard gates: $g_{S,E} = \text{Softmax}(w_g \cdot x_S)$.
 2.  Select the top-2 experts $e_1$ and $e_2$ with logits $g_1, g_2$.
@@ -206,7 +205,7 @@ $$G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right)$$
     $$\text{Dispatch if: } c_{e_2} < C \quad \wedge \quad 2 \cdot g_2' > \text{rnd}$$
     If dispatched, it receives a normalized weight $g_2' = \frac{g_2}{g_1 + g_2}$. If an expert is over capacity, the token is marked as overflown and bypasses the expert layer entirely via a residual connection.
 
-#### 3.1.4 Switch Routing (Top-1 Gating)
+#### 1.3.1.4 Switch Routing (Top-1 Gating)
 [Fedus et al. 2021 (Switch Transformers)](https://arxiv.org/abs/2101.03961) simplified the routing strategy to $k=1$:
 $$p_i(x) = \text{Softmax}\left(W_r \cdot x + \text{Noise}\right)_i$$
 $$i^* = \text{argmax}_i \, p_i(x)$$
@@ -216,7 +215,7 @@ $$Y = p_{i^*}(x) \cdot \text{FFN}_{i^*}(x)$$
 
 ---
 
-### 3.2 The Expert Layer Integration
+### 1.3.2 The Expert Layer Integration
 The experts are typically parameterized as identical Feed-Forward Networks (FFNs) but operate with independent weight matrices. The output of the MoE layer $Y$ is the weighted sum over all $E$ experts:
 $$Y = \sum_{e=1}^{E} G(x)_e \cdot \text{FFN}_e(x)$$
 
@@ -224,12 +223,12 @@ In Transformer architectures, the MoE layer is typically substituted into **ever
 
 ---
 
-### 3.3 Load Balancing and Gating Optimization
+### 1.3.3 Load Balancing and Gating Optimization
 
 Unconstrained routing optimization naturally collapses into a degenerative state where the router routes all tokens to the same expert. To force uniform utilization, models incorporate auxiliary loss terms into the training objective:
 $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{task}} + w_{\text{aux}} \cdot \mathcal{L}_{\text{aux}}$$
 
-#### 3.3.1 Shazeer et al. 2017: Importance and Load Losses
+#### 1.3.3.1 Shazeer et al. 2017: Importance and Load Losses
 Shazeer et al. used two separate loss terms:
 1.  **Importance Loss ($\mathcal{L}_{\text{importance}}$):** Pushes the total gate weights per expert toward uniform allocation:
     $$\text{Importance}(X) = \sum_{x \in X} G(x)$$
@@ -242,14 +241,14 @@ Shazeer et al. used two separate loss terms:
     $$\text{Load}(X) = \sum_{x \in X} P(x, i)$$
     $$\mathcal{L}_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2$$
 
-#### 3.3.2 GShard Group-Level Auxiliary Loss
+#### 1.3.3.2 GShard Group-Level Auxiliary Loss
 GShard groups tokens into $G$ parallel groups of size $S$. To enforce uniform routing across the $E$ experts, they minimize:
 $$\mathcal{L}_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \frac{c_e}{S} \cdot m_e$$
 Where $c_e$ is the discrete count of tokens in the group routed to expert $e$ (non-differentiable), and $m_e$ is the differentiable average routing probability assigned to expert $e$ across the group tokens:
 $$m_e = \frac{1}{S} \sum_{s=1}^S g_{s, e}$$
 By multiplying the non-differentiable actual routing fraction $c_e/S$ with the fully differentiable probability proxy $m_e$, gradient descent can propagate updates back to the router weights to shift probability mass away from overloaded experts.
 
-#### 3.3.3 Switch Transformer Simplified Load-Balancing Loss
+#### 1.3.3.3 Switch Transformer Simplified Load-Balancing Loss
 Switch Transformers consolidated load balancing into a single, clean auxiliary loss. Given $N$ experts and a batch $B$ with $T$ tokens, the loss is the scaled dot-product between the token dispatch fraction vector $f$ and the router probability fraction vector $P$:
 $$\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i$$
 Where:
@@ -262,11 +261,11 @@ The loss is minimized under a uniform distribution where $f_i = 1/N$ and $P_i = 
 
 ---
 
-## 4. Engineering and System Orchestration Challenges
+## 1.4 Engineering and System Orchestration Challenges
 
 Translating theoretical MoE formulations into high-performance execution requires deep system-level optimizations that address parallel computing bottlenecks.
 
-### 4.1 The Shrinking Batch and Communication Bottlenecks
+### 1.4.1 The Shrinking Batch and Communication Bottlenecks
 In standard distributed training, data-parallel replicas process distinct batches of size $b$ synchronously across $d$ devices. If an MoE layer contains $E$ experts, a naive local implementation means each expert receives a micro-batch of size:
 $$b_{\text{local\_expert}} \approx \frac{k \cdot b}{E}$$
 For large clusters with hundreds of experts, $b_{\text{local\_expert}} \to 0$, causing execution to become memory-bandwidth bound. 
@@ -288,7 +287,7 @@ Device 3 (Data Replica 3): ──> [Token 3a, Token 3b] ──┘               
 
 ---
 
-### 4.2 Expert Capacity and Token Dropping
+### 1.4.2 Expert Capacity and Token Dropping
 Because token routing is dynamic, some experts will naturally receive more tokens than average in any given batch. Since accelerators require statically shaped tensors at compile time, we must define a rigid buffer size per expert, termed the **Expert Capacity ($C_e$)**:
 
 $$C_e = \left( \frac{\text{Tokens Per Batch}}{\text{Number of Experts}} \right) \times C_f$$
@@ -309,10 +308,10 @@ Empirical trade-offs of the capacity factor are measured below:
 
 ---
 
-### 4.3 GShard SPMD Parallelism and XLA Compiler
+### 1.4.3 GShard SPMD Parallelism and XLA Compiler
 To orchestrate this dynamic routing and model partitioning across thousands of hardware accelerators, GShard pioneered a **Single Program Multiple Data (SPMD)** compiler partitioning pipeline.
 
-#### 4.3.1 SPMD vs. MPMD Scalability
+#### 1.4.3.1 SPMD vs. MPMD Scalability
 *   **MPMD (Multiple Program Multiple Data):** Traditionally, model parallelism generated distinct computation graphs for each individual device. This approach causes the compilation graph size to explode linearly ($O(D)$ or quadratic $O(D^2)$ due to communication links) as the cluster scale $D$ increases, resulting in prohibitive compilation times.
 *   **SPMD (Single Program Multiple Data):** SPMD generates a **single program** that runs identically on all devices. The logical tensors represent the global dimensions of the model, and the compiler automatically shards the operations based on lightweight user annotations. The graph size and compilation overhead remain **constant ($O(1)$)**, scaling easily to thousands of devices.
 
@@ -338,13 +337,13 @@ SPMD Approach (Single program compiled once, constant O(1) graph complexity):
               └───────────────────────────────┘
 ```
 
-#### 4.3.2 GShard Sharding Annotation APIs
+#### 1.4.3.2 GShard Sharding Annotation APIs
 GShard exposes three critical tensor partition annotations to the compiler:
 1.  `replicate(tensor)`: Restores or maintains the tensor in a replicated state across all devices (used for standard Transformer weights).
 2.  `split(tensor, split_dimension, num_partitions)`: Partitions the tensor along the specified dimension across the physical devices.
 3.  `shard(tensor, device_assignment)`: Generalizes partitioning to multi-dimensional layouts and specific hardware topologies.
 
-#### 4.3.3 XLA Collective Communication Primitives
+#### 1.4.3.3 XLA Collective Communication Primitives
 The compiler translates sharding mismatch boundaries in the dataflow graph into highly optimized collective communications:
 *   `AllToAll`: Logically splits the input of each participant along one dimension and distributes the pieces to different participants, concatenating them. This is the **workhorse** of MoE, used to reshard intermediate representations from the data-parallel dimension (Group/Tokens) to the model-parallel dimension (Experts) and back.
 *   `AllReduce`: Sums up partial results across all devices. Used in MoE when inputs are contracted along partitioned dimensions.
@@ -353,7 +352,7 @@ The compiler translates sharding mismatch boundaries in the dataflow graph into 
 
 ---
 
-### 4.4 Step-by-Step MoE Gating and All-to-All Communication Trace
+### 1.4.4 Step-by-Step MoE Gating and All-to-All Communication Trace
 
 Below is a detailed trace of the tensor layouts, shapes, and communication transitions through an SPMD MoE layer, mirroring the implementation within Mesh TensorFlow and the XLA partitioner:
 
@@ -406,7 +405,7 @@ Below is a detailed trace of the tensor layouts, shapes, and communication trans
 
 ---
 
-## 5. Architectural Comparison Matrix
+## 1.5 Architectural Comparison Matrix
 
 The following matrix contrasts the theoretical and structural differences across key landmark sparsely-gated MoE architectures:
 
@@ -424,11 +423,11 @@ The following matrix contrasts the theoretical and structural differences across
 
 ---
 
-## 6. Optimization and Training Stability Tricks
+## 1.6 Optimization and Training Stability Tricks
 
 Sparsity introduces sharp, non-differentiable routing transitions, which often trigger severe training instability in deep architectures. We detail the three foundational stabilization techniques established in the literature:
 
-### 6.1 Selective Precision
+### 1.6.1 Selective Precision
 Standard low-precision training (bfloat16) is highly susceptible to divergence in sparse routers due to numerical overflow and underflow in the softmax probability calculations. GShard bypassed this by running the entire MoE layer in float32, which doubled the required inter-device communication bandwidth.
 
 [Fedus et al. 2021](https://arxiv.org/abs/2101.03961) resolved this bottleneck via **Selective Precision**:
@@ -439,14 +438,14 @@ Standard low-precision training (bfloat16) is highly susceptible to divergence i
 5.  All heavy expert matrix multiplications are executed in `bfloat16`.
 *   *Benefit:* Restores absolute numerical stability during pre-training while preserving the full $2\times$ memory throughput advantage of bfloat16 communications.
 
-### 6.2 Reduced Initialization Scale
+### 1.6.2 Reduced Initialization Scale
 Deep sparse models are prone to early gradient explosions. Switch Transformers demonstrated that standard initialization scales (e.g., $s = 1.0$) for truncated normal distributions do not scale stably to hundreds of experts.
 *   **Remedy:** Reduce the weight initialization scale by a factor of 10 ($s = 0.1$). Elements are drawn from a truncated normal distribution with mean $\mu = 0$ and standard deviation:
     $$\sigma = \sqrt{\frac{0.1}{n_{\text{in}}}}$$
     Where $n_{\text{in}}$ is the fan-in (number of input units) of the weight matrix.
 *   *Impact:* Reduces the standard deviation of initial quality metric outputs from $0.68$ to $0.01$, stabilizing initialization and allowing models to scale seamlessly to over a trillion parameters.
 
-### 6.3 Expert Dropout Regularization
+### 1.6.3 Expert Dropout Regularization
 During the fine-tuning of pre-trained MoE models on smaller downstream datasets (e.g., GLUE benchmarks), the vast parameter count of the experts quickly leads to severe overfitting. 
 *   **Remedy:** Set a standard low dropout rate ($0.1$) at all non-expert layers (attention blocks, shared FFNs) and a significantly higher dropout rate (**$0.4$**) exclusively at the internal feed-forward projection within the experts (**Expert Dropout**).
 *   *Impact:* Prevents overparameterized experts from memorizing small-scale downstream corpora, unlocking significant quality improvements across knowledge-heavy reasoning tasks.
@@ -455,15 +454,15 @@ During the fine-tuning of pre-trained MoE models on smaller downstream datasets 
 ---
 
 
-# Section 2: Token-Choice Routing: Mechanics, Scaling, and Key Limitations {#section-2-token-choice-routing-mechanics-scaling-and-key-limitations}
+# Section 2: Token-Choice Routing: Mechanics, Scaling, and Key Limitations
 
 Sparsely-activated Mixture-of-Experts (MoE) layers replace traditional dense Feed-Forward Networks (FFNs) in Transformer architectures, scaling parameter capacity by several orders of magnitude while maintaining near-constant floating-point operations (FLOPs) per token. The critical engine enabling this decoupling of parameter capacity from compute cost is the **Routing (Gating) Network**. This section provides a mathematically rigorous formulation of token-choice routing, explores the landmark Switch routing ($k=1$) simplification, details the systems-level execution and balancing mechanics, and addresses the fundamental scaling limitations of this paradigm.
 
 ---
 
-## 1. Introduction and Theoretical Foundations
+## 2.1 Introduction and Theoretical Foundations
 
-### 1.1 The Conditional Computation Paradigm
+### 2.1.1 The Conditional Computation Paradigm
 Under the standard dense neural network paradigm, every parameter is activated for every input example, leading to a linear (or quadratic, if width and depth are scaled simultaneously) coupling between model capacity and computational cost. Conditional computation, first formalized in the context of deep learning by [Bengio et al. (2013)](https://arxiv.org/abs/1308.3432) and [Bengio et al. (2015)](https://arxiv.org/abs/1511.06297), proposes to dynamically activate distinct sub-networks on a per-example or per-token basis. 
 
 In a Sparse MoE layer, the model consists of a set of $N$ independent expert networks $\{E_1, E_2, \dots, E_N\}$, typically parameterized as identical FFN blocks but with separate weights. A trainable gating network $G(x)$ determines a sparse routing vector over these experts for a given token representation $x \in \mathbb{R}^{d_{\text{model}}}$. The mathematical output $y \in \mathbb{R}^{d_{\text{model}}}$ of the MoE layer is written as:
@@ -472,7 +471,7 @@ $$y = \sum_{i=1}^N G(x)_i E_i(x) \quad \text{(Eq. 1)}$$
 
 where $G(x)_i \ge 0$ is the gating coefficient for expert $i$, and $\sum_{i=1}^N G(x)_i = 1$ (if fully normalized) or represents a sparse subset. Computational savings are realized directly from the sparsity of $G(x)$: whenever $G(x)_i = 0$, the corresponding expert output $E_i(x)$ does not need to be computed, eliminating the associated FLOPs ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)).
 
-### 1.2 Softmax Gating (Jordan & Jacobs, 1994)
+### 2.1.2 Softmax Gating (Jordan & Jacobs, 1994)
 In classical hierarchical mixtures of experts ([Jordan & Jacobs, 1994](https://arxiv.org/abs/2006.16668)), the gating network is parameterized as a simple linear projection followed by a softmax activation:
 
 $$G_{\sigma}(x) = \text{Softmax}(x \cdot W_g) \quad \text{(Eq. 2)}$$
@@ -482,11 +481,11 @@ where $W_g \in \mathbb{R}^{d_{\text{model}} \times N}$ represents the routing pa
 
 ---
 
-## 2. Top-k Token-Choice Routing: Mathematical Mechanics
+## 2.2 Top-k Token-Choice Routing: Mathematical Mechanics
 
 To introduce true sparsity while maintaining end-to-end differentiability via backpropagation, [Shazeer et al. (2017)](https://arxiv.org/abs/1701.06538) formulated **Noisy Top-k Gating**. This routing architecture introduces two key modifications to Eq. 2: noise injection for exploration/load balancing and hard-sparsification via a top-$k$ filter.
 
-### 2.1 The Mathematical Formulation
+### 2.2.1 The Mathematical Formulation
 Let $W_g \in \mathbb{R}^{d_{\text{model}} \times N}$ be the gating weight matrix, and $W_{\text{noise}} \in \mathbb{R}^{d_{\text{model}} \times N}$ be a secondary noise control weight matrix. For a token vector $x$, the raw logit scores before sparsification, denoted by $H(x) \in \mathbb{R}^N$, are computed as:
 
 $$H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right) \quad \text{(Eq. 3)}$$
@@ -527,7 +526,7 @@ Token Input (x)
                                                               Sparse Gating Vector G(x)
 ```
 
-### 2.2 Gradient Flow and Backpropagation
+### 2.2.2 Gradient Flow and Backpropagation
 The $\text{KeepTopK}$ operator introduces discontinuities in the routing space, which could theoretically disrupt backpropagation. However, for any token $x$, let $\mathcal{T}(x) \subset \{1, \dots, N\}$ be the active set of top-$k$ indices. For any $i \in \mathcal{T}(x)$, the derivative of the output $y$ with respect to the gating parameters $W_g$ is non-zero and propagates through the standard softmax Jacobian:
 
 $$\frac{\partial G(x)_i}{\partial W_g} = G(x)_i \left( \mathbb{1}_{\{i = j\}} - G(x)_j \right) \frac{\partial H(x)_j}{\partial W_g} \quad \text{for } j \in \mathcal{T}(x)$$
@@ -536,11 +535,11 @@ Because the gradients are non-zero only for the active top-$k$ experts, the rout
 
 ---
 
-## 3. The Switch Routing (k=1) Simplification
+## 2.3 The Switch Routing (k=1) Simplification
 
 [Shazeer et al. (2017)](https://arxiv.org/abs/1701.06538) conjectured that routing to $k > 1$ experts was strictly necessary to produce non-trivial gradients and enable comparisons between different experts during training. However, [Fedus et al. (2021) (Switch Transformers)](https://arxiv.org/abs/2101.03961) challenged this assumption, simplifying the gating mechanism to $k=1$ (Switch Routing).
 
-### 3.1 Gating Formulations and Mechanics
+### 2.3.1 Gating Formulations and Mechanics
 In the Switch Transformer, the noisy gating mechanism is stripped of its noise terms to yield a deterministic, lightweight routing function:
 
 $$h(x) = W_r \cdot x \quad \text{(Eq. 6)}$$
@@ -555,7 +554,7 @@ The gating coefficient used in the final scaling of the FFN output is $p_{i^*}(x
 
 $$y = p_{i^*}(x) E_{i^*}(x) \quad \text{(Eq. 9)}$$
 
-### 3.2 Computational, System, and Communication Benefits of $k=1$
+### 2.3.2 Computational, System, and Communication Benefits of $k=1$
 The reduction from $k=2$ to $k=1$ introduces major structural improvements across several layers of the deep learning stack:
 
 1. **Halving of Gating Computations:** The router only executes a single expert activation per token, reducing the computational footprint of the routing step.
@@ -565,9 +564,9 @@ The reduction from $k=2$ to $k=1$ introduces major structural improvements acros
 
 ---
 
-## 4. System-Level Implementation and Performance Scaling
+## 2.4 System-Level Implementation and Performance Scaling
 
-### 4.1 Expert Capacity and the Capacity Factor
+### 2.4.1 Expert Capacity and the Capacity Factor
 To perform efficient static compilation (mandatory on TPU hardware and highly optimized for GPU tensor engines), the shape of all tensors must be statically defined at compile time. However, routing decisions are dynamic, depending entirely on the token-to-expert mapping calculated at runtime. 
 
 To bridge this gap, modern MoE frameworks use **Expert Capacity**, defining the maximum number of tokens that can be sent to an individual expert during a single forward pass. This capacity is parameterized by the **Capacity Factor ($C$)**:
@@ -590,7 +589,7 @@ With Capacity Factor C = 1.5       -> [▄][▄][▄][▄][▄][▄][ ][ ] -> Ac
 
   While [Zoph et al. (2022)](https://arxiv.org/abs/2202.08906) showed that downstream performance is surprisingly robust to token dropping rates of up to 10-15% during fine-tuning, severe token dropping during pre-training hinders semantic learning and degrades downstream model quality.
 
-### 4.2 GShard Top-2 Gating with Local Group Dispatching
+### 2.4.2 GShard Top-2 Gating with Local Group Dispatching
 To implement Top-2 routing at scale without experiencing sequential bottlenecks, [Lepikhin et al. (2020) (GShard)](https://arxiv.org/abs/2006.16668) formulated a parallelizable dispatch algorithm (detailed in Algorithm 1 of the paper) with the following features:
 
 1. **Local Group Partitioning:** To maintain constant compiler graph size and parallel execution independent of batch scaling, the total training batch of $N_{\text{tokens}}$ is split evenly into $G$ groups of size $S = N_{\text{tokens}} / G$. Gating and dispatching are computed locally within each group in parallel.
@@ -602,10 +601,10 @@ To implement Top-2 routing at scale without experiencing sequential bottlenecks,
    * The top-1 expert gate is normalized: $g_1' = \frac{g_1}{g_1+g_2}$. The token is assigned to $e_1$ if the expert's group buffer is not full ($c_{e_1} < C_{\text{group}}$).
    * GShard dispatches the token to the second-best expert $e_2$ with a probability proportional to its relative weight $g_2' = \frac{g_2}{g_1+g_2}$. A random variable $rnd \sim \text{Uniform}(0, 1)$ is sampled. If $2 \cdot g_2' > rnd$ and the second expert's buffer is not full ($c_{e_2} < C_{\text{group}}$), the token is routed to $e_2$ with gating weight $g_2'$. This conserves global capacity by probabilistically filtering out tokens with weak affiliations to their second-choice experts.
 
-### 4.3 Auxiliary Load Balancing Losses
+### 2.4.3 Auxiliary Load Balancing Losses
 Because the selection of the top-$k$ experts is a non-differentiable discrete operation ($\text{argmax}$ or $\text{TopK}$), gradient descent cannot directly optimize the discrete token count per expert. Consequently, routing networks are prone to a self-reinforcing imbalance: a few experts are favored early on, receive more updates, specialize faster, and are chosen even more by the router, leaving other experts under-utilized and untrained. To combat this, three distinct balancing losses have been formulated:
 
-#### A. Shazeer et al. (2017) Auxiliary Loss
+#### 2.4.3.1 A. Shazeer et al. (2017) Auxiliary Loss
 This method employs a dual-loss objective consisting of an importance-weighting loss and a load-balancing loss, using standard normal cumulative distribution functions ($\Phi$) as smooth estimators:
 
 1. **Importance Loss:** Defined as the square of the coefficient of variation ($CV^2$) of the batch-wise sum of the gate values:
@@ -628,14 +627,14 @@ The coefficient of variation $\text{CV}(v)$ for a vector $v \in \mathbb{R}^d$ is
 
 $$\text{CV}(v) = \frac{\sigma(v)}{\mu(v)} = \frac{\sqrt{\frac{1}{d}\sum_{j=1}^d (v_j - \bar{v})^2}}{\frac{1}{d}\sum_{j=1}^d v_j}$$
 
-#### B. GShard Auxiliary Loss
+#### 2.4.3.2 B. GShard Auxiliary Loss
 GShard simplifies the load-balancing objective into a single loss term that couples the differentiable mean gate probability $m_e$ with the non-differentiable group-dispatch fraction:
 
 $$\mathcal{L}_{\text{aux}} = \frac{1}{N} \sum_{e=1}^N \left( \frac{c_e}{S} \cdot m_e \right) \quad \text{(Eq. 16)}$$
 
 where $c_e$ is the final token dispatch count for expert $e$ (treated as a constant during backpropagation), and $m_e = \frac{1}{S} \sum_{s=1}^S g_{s, e}$ is the mean gate probability across the group.
 
-#### C. Switch Transformer Simplified Balancing Loss
+#### 2.4.3.3 C. Switch Transformer Simplified Balancing Loss
 Switch Transformers adapt the GShard load balancing loss to top-1 routing, scaling the scaled dot product between the fraction of tokens dispatched ($f$) and the average routing probability ($P$):
 
 $$\mathcal{L}_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i \quad \text{(Eq. 17)}$$
@@ -652,19 +651,19 @@ Setting $\alpha = 10^{-2}$ provides strong load balancing without degrading the 
 
 ---
 
-## 5. Key Limitations and Critical Failures of Token-Choice Routing
+## 2.5 Key Limitations and Critical Failures of Token-Choice Routing
 
 While token-choice routing has enabled scaling models to trillions of parameters, it exhibits severe algorithmic and system limitations that have catalyzed the research of alternative routing paradigms.
 
-### 5.1 Routing Imbalance and Self-Reinforcing Bias
+### 2.5.1 Routing Imbalance and Self-Reinforcing Bias
 The primary algorithmic challenge in token-choice routing is its intrinsic **load imbalance**. The routing network is highly sensitive to initialization parameters. If an expert receives slightly more tokens in the early steps of training, it undergoes faster optimization, specialized learning, and parameter updates. Consequently, the router increases its affinity toward this expert, generating a positive feedback loop (the "rich-get-richer" effect). If auxiliary losses are uncalibrated or set too low ($\alpha < 10^{-5}$), the system collapses to a state where a tiny subset of experts (typically 1 or 2) process 100% of the tokens, causing the remaining parameters to starve and remain untrained ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)).
 
-### 5.2 Token Dropping Under Capacity Constraints
+### 2.5.2 Token Dropping Under Capacity Constraints
 Because physical memory is hard-allocated for static expert buffers (Eq. 10), any token that overflows the capacity is dropped, skipping the FFN computation block entirely. This causes significant semantic loss:
 * In downstream **fine-tuning** and **sequence-to-sequence generation**, dropping important verbs or proper nouns degrades context modeling, leading to hallucinations or grammar errors.
 * Dropping tokens reduces representation capacity, forcing the model to rely solely on residual connections to carry complex token representations.
 
-### 5.3 Representation Collapse and Under-Specialization
+### 2.5.3 Representation Collapse and Under-Specialization
 To prevent routing imbalance, auxiliary balancing losses (Eq. 16, 17) force the routing network to distribute tokens uniformly. However, this introduces a fundamental tension between **load-balancing** and **semantic specialization**:
 * If the balancing coefficient $\alpha$ is too high, the routing network prioritizes uniform distribution over actual semantic affinity, routing tokens based on capacity rather than matching capabilities.
 * **Expert/Representation Collapse:** When forced to route uniformly, experts receive a heterogeneous, noisy mixture of tokens. As a result, experts cannot specialize in specific syntactic structures, semantics, or grammatical entities. Instead, all experts learn broad, overlapping representations, collapsing back into a redundant dense parameter state.
@@ -678,10 +677,10 @@ Expert-Choice Routing:
 Experts (Fixed Capacity)     ──> [ Top-K Token Select ] ──> Variable Tokens per Expert (No drops!)
 ```
 
-### 5.4 The Alternative: Expert-Choice Routing (Zhou et al., 2022)
+### 2.5.4 The Alternative: Expert-Choice Routing (Zhou et al., 2022)
 To bypass the issues of token dropping and routing imbalance, [Zhou et al. (2022)](https://arxiv.org/abs/2202.09368) introduced **Expert-Choice Routing**. Instead of having tokens choose the top-$k$ experts, **experts select the top-$k$ tokens**.
 
-#### The Formulation
+#### 2.5.4.1 The Formulation
 Given $n$ input tokens $X \in \mathbb{R}^{n \times d_{\text{model}}}$, a gating projection $W_g \in \mathbb{R}^{d_{\text{model}} \times E}$ produces a token-to-expert affinity matrix $S$:
 
 $$S = \text{Softmax}(X \cdot W_g), \quad S \in \mathbb{R}^{n \times E} \quad \text{(Eq. 20)}$$
@@ -692,19 +691,19 @@ $$G, I = \text{TopK}(S^T, k), \quad G \in \mathbb{R}^{E \times k}, \, I \in \mat
 
 where $I[i, j]$ denotes the index of the $j$-th selected token for expert $i$, and $G[i, j]$ is its routing weight.
 
-#### Why Expert-Choice Outperforms Token-Choice:
+#### 2.5.4.2 Why Expert-Choice Outperforms Token-Choice:
 1. **Guaranteed Load Balancing by Design:** Because each expert selects exactly $k$ tokens, every expert receives an identical batch size, ensuring perfect load balancing without requiring auxiliary losses.
 2. **Zero Token Dropping:** No tokens are dropped due to capacity overflow, as experts pull exactly $k$ tokens directly from the input pool.
 3. **Flexible Computation Allocation (Heterogeneity):** Important tokens (e.g., highly informative words) can be selected by multiple experts simultaneously, while less important tokens (e.g., punctuation, stop words) are routed to a single expert or skipped entirely. Empirically, [Zhou et al. (2022)](https://arxiv.org/abs/2202.09368) found that 23% of tokens are routed to 3-4 experts and 3% to more than 4, which improves training convergence speeds by over 2x compared to GShard and Switch routing.
 
-### 5.5 Router Instability and Lower-Precision Training Failures
+### 2.5.5 Router Instability and Lower-Precision Training Failures
 At massive scales, training MoE models in lower precision formats (e.g., `bfloat16`) often causes severe training instabilities, manifesting as sudden, catastrophic divergences in training loss (see Figure 1 in [Zoph et al. 2022](https://arxiv.org/abs/2202.08906)). 
 
-#### Rationale for Instability:
+#### 2.5.5.1 Rationale for Instability:
 * `bfloat16` has identical dynamic range to `float32` but features a significantly smaller mantissa (7 bits vs. 23 bits), leading to roundoff errors that are up to 65,536x worse.
 * Gating networks rely on exponentiated softmax computations. If gating logits scale too high, small roundoff errors in the logits propagate exponentially through the softmax function, drastically altering routing probability assignments. For example, a roundoff error of 0.5 in `bfloat16` can alter softmax routing outputs by over 36% ([Zoph et al. 2022](https://arxiv.org/abs/2202.08906)).
 
-#### The Solution: Selective Precision and Router Z-Loss
+#### 2.5.5.2 The Solution: Selective Precision and Router Z-Loss
 To stabilize massive sparse models (e.g., ST-MoE-269B) without sacrificing execution speed, researchers use a two-part stabilization protocol:
 
 1. **Selective Precision:** The gating logits and softmax probabilities are cast and computed locally in high-precision `float32`. Once the sparse routing indices and weights are resolved, they are cast back to `bfloat16` for cross-device `All-to-All` communication, avoiding bandwidth overhead ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)).
@@ -716,7 +715,7 @@ To stabilize massive sparse models (e.g., ST-MoE-269B) without sacrificing execu
 
 ---
 
-## 6. Comprehensive Routing Comparison Matrix
+## 2.6 Comprehensive Routing Comparison Matrix
 
 The table below provides a detailed structural comparison of the four key routing architectures discussed in this section.
 
@@ -735,7 +734,7 @@ The table below provides a detailed structural comparison of the four key routin
 
 ---
 
-## 7. References
+## 2.7 References
 
 * **Shazeer et al. 2017:** *Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer.* [PDF Citation](https://arxiv.org/abs/1701.06538)
 * **Lepikhin et al. 2020 (GShard):** *GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding.* [PDF Citation](https://arxiv.org/abs/2006.16668)
@@ -747,13 +746,13 @@ The table below provides a detailed structural comparison of the four key routin
 ---
 
 
-# Section 3: Alternative Gating Paradigms: Expert-Choice Routing {#section-3-alternative-gating-paradigms-expert-choice-routing}
+# Section 3: Alternative Gating Paradigms: Expert-Choice Routing
 
 ## 3.1 Paradigm Shift: Token-Choice vs. Expert-Choice
 
 In conventional sparse Mixture-of-Experts (MoE) architectures—such as those introduced by [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538), [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668), and [Fedus et al. 2021 (Switch Transformers)](https://arxiv.org/abs/2101.03961)—routing is framed as a **token-choice** decision. In this setup, each token independently selects the top-$k$ (typically $k \in \{1, 2\}$) experts from a pool of $e$ available experts based on routing affinity scores. Although intuitive, this independent token-choice paradigm introduces several fundamental engineering and algorithmic bottlenecks that degrade training efficiency and model quality.
 
-### Pitfalls of Conventional Token-Choice Routing
+### 3.1.1 Pitfalls of Conventional Token-Choice Routing
 
 1. **Load Imbalance and Expert Under-Utilization**:
    Because tokens make routing decisions independently, they naturally tend to favor a small subset of experts (e.g., those processing common syntactic structures or highly frequent subwords). This results in a highly skewed distribution where a few "hot" experts are over-utilized, while the remaining majority of experts are under-utilized. Under-utilized experts waste significant parameter capacity and remain under-trained, leading to poor parameter efficiency.
@@ -767,7 +766,7 @@ In conventional sparse Mixture-of-Experts (MoE) architectures—such as those in
 4. **Homogeneous Computational Budgets**:
    Token-choice routing allocates exactly $k$ experts to every token. This uniform compute allocation ignores the inherent variance in token complexity. Intuitively, highly informative tokens (e.g., rare entities, core verbs, or complex nouns) require more capacity and representation power than highly frequent or syntactic tokens (e.g., punctuation marks, prepositions, or stop words). 
 
-### The Expert-Choice Alternative
+### 3.1.2 The Expert-Choice Alternative
 
 To resolve these limitations, [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) proposed a paradigm shift: **Expert-Choice Routing (ECR)**. Instead of letting tokens select experts, ECR lets **experts select tokens**. By reversing the selection direction:
 - Each expert is guaranteed to receive a fixed, pre-defined number of tokens, ensuring **perfect load balancing by construction** and eliminating the need for unstable auxiliary losses.
@@ -793,40 +792,40 @@ Expert-Choice Gating (Zhou et al. 2022):
 
 Let the input representations to the MoE layer be denoted by a matrix $X \in \mathbb{R}^{n \times d}$, where $n$ represents the total number of tokens in the current batch (i.e., $\text{batch size} \times \text{sequence length}$) and $d$ denotes the hidden dimension of the model. Let $e$ be the total number of experts in the MoE layer, and $c$ be the user-defined **capacity factor**, which specifies the average number of experts routed to each token.
 
-### 1. Capacity Determination
+### 3.2.1 Capacity Determination
 The expert capacity $k$, representing the exact number of tokens that each expert must select, is defined as:
 $$k = \left\lceil \frac{n \times c}{e} \right\rceil \tag{1}$$
 
-### 2. Affinity Score Computation
+### 3.2.2 Affinity Score Computation
 The token-to-expert affinity matrix $S \in \mathbb{R}^{n \times e}$ is computed via a gating projection matrix $W_g \in \mathbb{R}^{d \times e}$ followed by a softmax activation over the expert dimension:
 $$S = \text{Softmax}(X \cdot W_g) \tag{2}$$
 Each element $S[l, i]$ represents the affinity score of token $l$ for expert $i$.
 
-### 3. Column-Wise Top-K Routing
+### 3.2.3 Column-Wise Top-K Routing
 Unlike token-choice models that perform a row-wise $\text{TopK}$ on $S$ (selecting the best experts for each token), Expert-Choice Routing transposes $S$ to obtain $S^\top \in \mathbb{R}^{e \times n}$ and performs a row-wise $\text{TopK}$ operation on the transposed matrix. This is equivalent to performing a **column-wise $\text{TopK}$ over the token dimension of the original affinity matrix $S$**:
 $$G, I = \text{TopK}(S^\top, k) \tag{3}$$
 - **Index Matrix ($I \in \mathbb{R}^{e \times k}$)**: $I[i, j]$ specifies the absolute token index $l \in \{1, \dots, n\}$ selected as the $j$-th token for expert $i$.
 - **Gating Matrix ($G \in \mathbb{R}^{e \times k}$)**: $G[i, j]$ denotes the gating weight (affinity score) of expert $i$ for its $j$-th selected token.
 
-### 4. Permutation Matrix Formulation
+### 3.2.4 Permutation Matrix Formulation
 The assignment indices are mapped to a three-dimensional one-hot permutation tensor $P \in \{0, 1\}^{e \times k \times n}$, defined as:
 $$P[i, j, l] = \begin{cases} 
 1 & \text{if } I[i, j] = l \\ 
 0 & \text{otherwise} 
 \end{cases} \tag{4}$$
 
-### 5. Dispatch / Permutation Operation
+### 3.2.5 Dispatch / Permutation Operation
 Using the permutation tensor $P$, the input token representations $X$ are gathered and permuted into the expert input tensor $X_{in} \in \mathbb{R}^{e \times k \times d}$, where $X_{in}[i] \in \mathbb{R}^{k \times d}$ is the input matrix for expert $i$:
 $$X_{in} = P \cdot X \tag{5}$$
 In tensor index notation, this gather operation is represented as:
 $$X_{in}[i, j, m] = \sum_{l=1}^{n} P[i, j, l] X[l, m] \tag{6}$$
 
-### 6. Expert Computation
+### 3.2.6 Expert Computation
 Let $W_1[i] \in \mathbb{R}^{d \times d_{ff}}$ and $W_2[i] \in \mathbb{R}^{d \times d_{ff}}$ represent the weight parameters of the feed-forward sub-network for expert $i$. The intermediate expert activation $X_e[i] \in \mathbb{R}^{k \times d}$ is computed using the $\text{GeLU}$ activation function:
 $$X_e[i] = \text{GeLU}(X_{in}[i] \cdot W_1[i]) \cdot W_2[i]^\top \tag{7}$$
 *(Note: To maximize model quality, modern implementations can substitute the standard FFN with a Gated Linear Unit, such as SwiGLU).*
 
-### 7. Combine / Scatter Operation
+### 3.2.7 Combine / Scatter Operation
 The final output of the MoE layer, $X_{out} \in \mathbb{R}^{n \times d}$, is reconstructed by scattering the expert outputs back to their original token positions, scaled by their respective gating values in $G$. This is computed via the following Einstein summation (einsum) formulation:
 $$X_{out}[l, m] = \sum_{i=1}^{e} \sum_{j=1}^{k} P[i, j, l] G[i, j] X_e[i, j, m] \tag{8}$$
 
@@ -845,7 +844,7 @@ By framing routing from the perspective of the experts, Expert-Choice Routing fu
 3. **Elimination of Stragglers and 20% Speedup**:
    In distributed training, experts are partitioned across different hardware devices (expert parallelism). Under token-choice gating, the speed of a training step is bounded by the slowest device (the one hosting the most heavily overloaded expert). ECR guarantees that every device executes exactly the same amount of computation ($k$ tokens through its FFN). Consequently, [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) demonstrated that ECR achieves a **20% step time speedup** compared to [GShard](https://arxiv.org/abs/2006.16668) top-2 gating at identical theoretical FLOPS, solely by removing distributed execution stragglers.
 
-### Variable Token Allocation and Compute Heterogeneity
+### 3.3.1 Variable Token Allocation and Compute Heterogeneity
 
 While ECR ensures that every expert receives an identical workload, it introduces a highly desirable **heterogeneity on the token side**. Since a token $l$ can appear in the top-$k$ lists of multiple experts or none at all, the number of experts allocated to a specific token varies dynamically. 
 
@@ -872,7 +871,7 @@ This adaptive allocation allows the model to fluidly concentrate its parameters 
 
 A potential issue with vanilla ECR is that a small fraction of highly influential tokens could be selected by an excessively large number of experts (e.g., $N_e(l) > 10$), which over-concentrates compute and reduces the diversity of tokens each expert sees. To prevent this, the authors introduced **Capped Expert-Choice Routing**, which limits the maximum number of experts assigned to any single token to an upper bound $b > 0$.
 
-### Optimization Formulation
+### 3.4.1 Optimization Formulation
 This routing restriction is formulated as an **entropy-regularized linear programming problem**. Let $A \in \mathbb{R}^{e \times n}$ be the continuous assignment matrix, where $A[i, j] \in [0, 1]$ represents the affinity score/routing probability of routing expert $i$ to token $j$. The objective is to find an optimal assignment $A$ that maximizes token-expert affinity while respecting both expert and token capacity constraints:
 
 $$\max_{A} \sum_{i=1}^e \sum_{j=1}^n S^\top[i, j] A[i, j] + \lambda H(A) \tag{9}$$
@@ -889,7 +888,7 @@ Here, $H(A) = -\sum_{i, j} A[i, j] \log A[i, j]$ is the element-wise Shannon ent
 - It guarantees that the objective function is strictly concave, ensuring a unique global maximum.
 - It enables the use of fast, highly parallelizable iterative solvers that are compatible with accelerator architectures (e.g., TPUs).
 
-### Dykstra’s Projection Algorithm
+### 3.4.2 Dykstra’s Projection Algorithm
 To solve this optimization problem during the forward pass, [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) employ **Dykstra's Projection Algorithm** [Dykstra 1985](https://arxiv.org/abs/2202.09368). The solution space is defined as the intersection of three convex constraint sets:
 $$\mathcal{C}_1 = \left\{ A \;\middle|\; \forall i, \sum_{j} A[i, j] = k \right\}, \quad \mathcal{C}_2 = \left\{ A \;\middle|\; \forall j, \sum_{i} A[i, j] \leq b \right\}, \quad \mathcal{C}_3 = \{ A \;|\; 0 \leq A[i, j] \leq 1 \}$$
 
@@ -907,14 +906,14 @@ $$I = \text{TopK}(A, k) \tag{13}$$
 
 The empirical validations conducted by [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) showcase the substantial pre-training efficiency and downstream fine-tuning gains of Expert-Choice Routing.
 
-### Pre-Training Convergence Efficiency
+### 3.5.1 Pre-Training Convergence Efficiency
 When pre-trained on a massive 1.6-trillion-token corpus, ECR with a capacity factor of 2 (`EC-CF2`) achieved a **>2× training convergence speedup** compared to `GShard Top-2` and `Switch Transformer Top-1`. Specifically, `EC-CF2` reached the final evaluation perplexity of `GShard Top-2` in **less than 45% of the training steps**. When step latency is factored in—where ECR steps are **20% faster** due to the elimination of load imbalance stragglers—the real-wall-clock training efficiency gain exceeds **2.4×**.
 
-### Downstream Fine-Tuning Performance (GLUE & SuperGLUE)
+### 3.5.2 Downstream Fine-Tuning Performance (GLUE & SuperGLUE)
 
 The tables below present the downstream performance of ECR compared against `Switch Transformer (ST) Top-1` and `GShard (GS) Top-2` across a suite of 11 GLUE and SuperGLUE tasks.
 
-#### 1. Downstream Performance across Varied Model Scales (Dev Accuracy)
+#### 3.5.2.1 Downstream Performance across Varied Model Scales (Dev Accuracy)
 
 | Scale / Model | BoolQ | CB | CoLA | MNLI | MRPC | QNLI | QQP | RTE | SST2 | WiC | WNLI | **Avg** |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -935,7 +934,7 @@ The tables below present the downstream performance of ECR compared against `Swi
 | *GS Top-2* | 89.5 | 96.7 | 87.5 | 91.4 | 91.7 | 94.9 | 92.5 | 92.2 | 98.0 | 76.4 | 82.8 | **90.3** |
 | *EC-CF2 (Ours)* | 89.2 | 100.0| 89.1 | 91.1 | 90.6 | 95.0 | 93.8 | 95.2 | 97.7 | 83.8 | 92.8 | **92.6** |
 
-#### 2. Downstream Comparison: Dense 8B vs. MoE EC-CF2 8B/64E
+#### 3.5.2.2 Downstream Comparison: Dense 8B vs. MoE EC-CF2 8B/64E
 To evaluate downstream quality improvements against dense baselines under equal computing envelopes, the table below compares the 8B dense model with the `8B/64E EC-CF2` MoE model:
 
 | Model | BoolQ | CB | CoLA | MNLI | MRPC | QNLI | QQP | RTE | SST2 | WiC | WNLI | **Avg** |
@@ -943,7 +942,7 @@ To evaluate downstream quality improvements against dense baselines under equal 
 | **Dense 8B** | 88.2 | 100.0 | 86.4 | 91.3 | 86.7 | 94.7 | 91.2 | 92.2 | 97.2 | 75.6 | 78.1 | **89.2** |
 | **EC-CF2 8B/64E** | 89.2 | 100.0 | 89.1 | 91.1 | 90.6 | 95.0 | 93.8 | 95.2 | 97.7 | 83.8 | 92.8 | **92.6** |
 
-### Crucial Empirical Insights
+### 3.5.3 Crucial Empirical Insights
 
 1. **Pre-Training Perplexity vs. Downstream Task Performance**:
    An interesting finding in Table 2 is that the **100M/32E** model outperforms both **100M/64E** and **100M/128E** in downstream accuracy for both `GS Top-2` and `EC-CF2`, despite the larger models achieving superior pre-training perplexity. This represents a vital architectural lesson: **excessive sparse scaling can lead to downstream generalization limits**. If experts are scaled too aggressively on relatively smaller datasets or models, each expert receives fewer gradient updates during fine-tuning, leading to under-specialized representations on narrow tasks.
@@ -966,27 +965,27 @@ To evaluate downstream quality improvements against dense baselines under equal 
 
 Despite its superior training efficiency, Expert-Choice Routing exhibits structural characteristics that make it difficult to integrate into standard downstream inference pipelines, particularly for generative tasks.
 
-### 1. The Autoregressive Decoding Conflict (Causal Masking)
+### 3.6.1 The Autoregressive Decoding Conflict (Causal Masking)
 The most critical bottleneck of ECR is its **incompatibility with causal, token-by-token generation**. 
 - ECR determines routing by running a global `TopK` operation across the token dimension of the batch ($n = \text{batch size} \times \text{sequence length}$).
 - During auto-regressive decoding, tokens are generated sequentially, one step at a time. The future tokens are physically unavailable, making the global token-wise `TopK` computation impossible to evaluate.
 - Furthermore, if historical tokens are cached (KV caching), their relative affinity rankings change dynamically with each newly generated token. Re-running the global `TopK` at each step would require re-routing all past tokens through the MoE layers, which destroys the compute savings of MoE.
 
-#### Proposed Mitigation Strategies
+#### 3.6.1.1 Proposed Mitigation Strategies
 To deploy ECR models for autoregressive inference, several engineering approximations are required:
 - **Sequence Grouping / Batch Syncing**: Collecting a fixed buffer of generated tokens before executing a batched forward pass. This introduces a trade-off between decoding latency and routing optimality.
 - **Token-Choice Fallback**: Pre-training the model with ECR to exploit its speed and convergence benefits, but using a student token-choice router trained to mimic the expert-choice routing decisions during sequential inference.
 
-### 2. Small Batch Serving Degradation
+### 3.6.2 Small Batch Serving Degradation
 In real-time inference serving (e.g., online chat applications), the serving system often operates under a low-batch-size regime (e.g., batch size = 1, sequence length = 1).
 - Under this regime, the token pool size $n$ is extremely small.
 - The expert capacity $k = \lceil \frac{n \times c}{e} \rceil$ drops below 1. For instance, in an 8B/64E model with $n=1$, $k$ is tiny, meaning most experts are forced to receive 0 tokens, and the global `TopK` degenerates into selecting the single active token for a single expert.
 - The model capacity degrades drastically because the massive expert parallel compute is wasted on a tiny token pool, making ECR highly inefficient for low-latency, small-batch serving.
 
-#### Proposed Mitigation Strategies
+#### 3.6.2.1 Proposed Mitigation Strategies
 - **Global Thresholding**: Replacing the hard `TopK` selection with a sigmoid thresholding router where experts select all tokens with affinity scores above a fixed scalar $\tau$, capping the maximum tokens per expert to manage memory constraints.
 
-### 3. High Parameter Footprint and Memory Overheads
+### 3.6.3 High Parameter Footprint and Memory Overheads
 While ECR solves the computational inefficiencies (FLOPS) and load imbalances of MoE training, it does not alleviate the memory footprint bottleneck. An 8B/64E MoE model contains **143 billion parameters** in total, even though only **9.8 billion parameters** are activated per token. 
 - Distributing these 143B parameters requires a massive TPU/GPU cluster solely to hold the model weights in High Bandwidth Memory (HBM).
 - ECR does not reduce this memory constraint. While dynamic power is saved by only executing the active parameters, static power (device provisioning and leakage) remains high, presenting a severe financial and ecological barrier for deployment compared to dense architectures of equivalent active sizes.
@@ -995,7 +994,7 @@ While ECR solves the computational inefficiencies (FLOPS) and load imbalances of
 ---
 
 
-# Section 4: Differentiable and Continuous Gating: Soft MoE {#section-4-differentiable-and-continuous-gating-soft-moe}
+# Section 4: Differentiable and Continuous Gating: Soft MoE
 
 Sparse Mixture of Experts (MoE) architectures traditionally rely on discrete routing mechanisms, such as Token Choice gating ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)) or Expert Choice gating ([Zhou et al. 2022](https://arxiv.org/abs/2202.09368)), to scale model capacity while maintaining a constant computational budget per token. However, these hard routing algorithms introduce severe optimization, algorithmic, and engineering challenges—including training instability, token dropping, expert load imbalance, and non-differentiable operations.
 
@@ -1072,11 +1071,11 @@ The MoE layer consists of $n$ expert functions $\{f_i: \mathbb{R}^d \to \mathbb{
 
 To learn the routing, we introduce a parameter tensor $\Phi \in \mathbb{R}^{d \times (n \cdot p)}$ (or $d \times n \times p$), representing the $d$-dimensional parameter vector associated with each slot.
 
-#### Step 1: Logit Generation
+#### 4.2.1.1 Step 1: Logit Generation
 First, we compute the compatibility score (logits) between every token $i$ and slot $j$:
 $$S = X \Phi \in \mathbb{R}^{m \times (n \cdot p)}$$
 
-#### Step 2: Slot Dispatching
+#### 4.2.1.2 Step 2: Slot Dispatching
 To construct the inputs for each slot, we perform a softmax normalization over the columns of $S$ (over the input tokens $m$ for each slot $j$). This produces the **dispatch weights** $D \in \mathbb{R}^{m \times (n \cdot p)}$:
 $$D_{ij} = \frac{\exp(S_{ij})}{\sum_{i'=1}^m \exp(S_{i'j})}$$
 
@@ -1086,11 +1085,11 @@ $$\tilde{X}_j = \sum_{i=1}^m D_{ij} X_i$$
 
 Because $\sum_{i=1}^m D_{ij} = 1$, each slot is guaranteed to receive a normalized, stable combination of the input sequence.
 
-#### Step 3: Expert Processing
+#### 4.2.1.3 Step 3: Expert Processing
 Each slot input is processed by its corresponding expert. If expert functions are mapped round-robin or in contiguous blocks, the output slots $\tilde{Y} \in \mathbb{R}^{(n \cdot p) \times d}$ are computed as:
 $$\tilde{Y}_j = f_{\lfloor j/p \rfloor}(\tilde{X}_j) \quad \text{for } j \in [0, n \cdot p - 1]$$
 
-#### Step 4: Token Combination
+#### 4.2.1.4 Step 4: Token Combination
 To reconstruct the original sequence shape, the output tokens $Y \in \mathbb{R}^{m \times d}$ are generated by mixing the processed output slots $\tilde{Y}$. The mixing weights are determined by normalizing the logits $S$ over the rows (over all $n \cdot p$ slots for each token $i$). This yields the **combine weights** $C \in \mathbb{R}^{m \times (n \cdot p)}$:
 $$C_{ij} = \frac{\exp(S_{ij})}{\sum_{j'=1}^{n \cdot p} \exp(S_{ij'})}$$
 
@@ -1357,7 +1356,7 @@ Fitting 54B parameters in GPU/TPU memory requires sharding parameters across mul
 ---
 
 
-# Section 5: DeepSeekMoE and Hybrid Architectures: Shared & Specialized Experts {#section-5-deepseekmoe-and-hybrid-architectures-shared-specialized-experts}
+# Section 5: DeepSeekMoE and Hybrid Architectures: Shared & Specialized Experts
 
 Mixture of Experts (MoE) architectures have emerged as the dominant paradigm for scaling the parameter capacity of Large Language Models (LLMs) without a proportional increase in computational cost ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)). However, conventional Sparse MoE architectures, such as GShard ([Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668)) and Switch Transformers ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)), suffer from two severe fundamental challenges: **knowledge redundancy** and **routing collapse / parameter under-utilization**. 
 
@@ -1367,14 +1366,14 @@ This report section details the mathematical, statistical, and empirical propert
 
 ---
 
-## 1. Architectural Foundations of DeepSeekMoE
+## 5.1 Architectural Foundations of DeepSeekMoE
 
-### 1.1 The Core Problem: Knowledge Redundancy and Sparse Routing
+### 5.1.1 The Core Problem: Knowledge Redundancy and Sparse Routing
 In standard sparse MoEs, each token selects a subset of experts (typically $K=1$ or $K=2$) from a pool of $N$ homogeneous experts. Because the routing is dynamically learned from scratch, several experts often end up acquiring overlapping, redundant representations of common linguistic or factual knowledge (e.g., punctuation, grammar, and basic syntactic structures). This redundancy prevents these experts from fully specializing in distinct domains, resulting in:
 1. **Inefficient Parameter Utilization**: A significant fraction of each expert's capacity is wasted representing identical "common" knowledge.
 2. **Routing Fluctuation**: The gating network experiences high volatility during training as experts compete to represent the same broad concepts.
 
-### 1.2 The DeepSeekMoE Strategy
+### 5.1.2 The DeepSeekMoE Strategy
 DeepSeekMoE partitions the MoE layer into two distinct functional categories:
 * **Shared Experts ($N_s$)**: A set of experts that are always activated for every single token, regardless of the routing decisions. They serve as a dedicated repository for common, task-agnostic knowledge across all domains.
 * **Specialized Routed Experts ($N_r$)**: A larger pool of highly fine-grained experts, of which only a small subset ($K_r$) is dynamically activated per token. By isolating the common knowledge in the shared experts, the routed experts are freed to specialize deeply in narrow, distinct concepts.
@@ -1416,7 +1415,7 @@ graph TD
     style RoutedExperts fill:#bbf,stroke:#333,stroke-width:2px
 ```
 
-### 1.3 Mathematical Formulation
+### 5.1.3 Mathematical Formulation
 Let $\mathbf{u}_t \in \mathbb{R}^d$ be the input hidden state of the $t$-th token at a given Transformer layer. The output of the DeepSeekMoE FFN layer, denoted by $\mathbf{h}'_t \in \mathbb{R}^d$, is formulated as:
 
 $$\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j,t} \text{FFN}_j^{(r)}(\mathbf{u}_t)$$
@@ -1426,7 +1425,7 @@ where:
 * $\text{FFN}_j^{(r)}(\cdot)$ is the $j$-th specialized routed expert.
 * $g_{j,t}$ is the gate value for the $j$-th routed expert, defined via a sparse routing mechanism.
 
-#### Gating Mechanics:
+#### 5.1.3.1 Gating Mechanics:
 Let $s_{j,t}$ denote the token-to-expert affinity score for the $j$-th routed expert. In DeepSeek-V2 ([DeepSeek-V2 2024](https://arxiv.org/abs/2405.04434)), the affinity is computed using a softmax over the projection centroids:
 
 $$s_{j,t} = \text{Softmax}_j\left(\mathbf{u}_t^T \mathbf{e}_j\right) = \frac{\exp\left(\mathbf{u}_t^T \mathbf{e}_j\right)}{\sum_{m=1}^{N_r} \exp\left(\mathbf{u}_t^T \mathbf{e}_m\right)}$$
@@ -1435,10 +1434,10 @@ where $\mathbf{e}_j \in \mathbb{R}^d$ is the centroid embedding vector of the $j
 
 $$g_{j,t} = \begin{cases} s_{j,t}, & s_{j,t} \in \text{Topk}\left(\{s_{m,t} \mid 1 \le m \le N_r\}, K_r\right) \\ 0, & \text{otherwise} \end{cases}$$
 
-### 1.4 Fine-Grained Expert Segmentation Parameters
+### 5.1.4 Fine-Grained Expert Segmentation Parameters
 DeepSeekMoE achieves superior representation capacity by segmenting standard experts into a much finer granularity. Under a constant computational budget (i.e., keeping the number of active parameters per token constant), the expert intermediate hidden dimension $D_{FFN}$ is scaled down by a factor $m$, and the total number of specialized experts is scaled up by $m$. 
 
-#### Concrete Architectural Specifications:
+#### 5.1.4.1 Concrete Architectural Specifications:
 To illustrate the extreme sparsity and granularity, we compare the architectural parameters of the feed-forward networks (FFNs) of **DeepSeek-V2 (236B total parameters, 21B activated parameters)** with typical dense or sparse MoE baselines:
 
 | Parameter | Standard MoE (GShard-like) | DeepSeek-V2 ([DeepSeek-V2 2024](https://arxiv.org/abs/2405.04434)) | DeepSeek-V2-Lite |
@@ -1457,12 +1456,12 @@ By setting the intermediate dimension of each expert to $1536$ (instead of $1382
 
 ---
 
-## 2. Statistical Convergence and Sample Complexity Analysis
+## 5.2 Statistical Convergence and Sample Complexity Analysis
 
 A foundational question in deep learning theory is: **Why does the shared expert strategy work so well?** 
 [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) addressed this from a statistical perspective by conducting a convergence analysis of the expert estimation task. They proved that the shared expert strategy yields a **massive leap in sample efficiency** for parameter estimation.
 
-### 2.1 Mixture of Experts Conditional Density under Softmax Gating
+### 5.2.1 Mixture of Experts Conditional Density under Softmax Gating
 Let $(X_1, Y_1), \dots, (X_n, Y_n) \in \mathbb{R}^d \times \mathbb{R}$ be $i.i.d.$ samples generated from a Gaussian DeepSeekMoE conditional density $f_{G_1^*, G_2^*}(y|x)$ defined as:
 
 $$f_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\exp\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \exp\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)$$
@@ -1483,7 +1482,7 @@ $$\mathbb{E}_X\left[ V\left(f_{\hat{G}_n^1, \hat{G}_n^2}(\cdot \mid X), f_{G_1^*
 
 However, the rate at which the *underlying parameters* $(\hat{\kappa}_n, \hat{\eta}_n)$ of individual experts converge depends heavily on the expert functions and the gating mechanism.
 
-### 2.2 The Strong Identifiability Condition
+### 5.2.2 The Strong Identifiability Condition
 To characterize the convergence of expert parameters, the expert functions must satisfy a strict linear independence property on their partial derivatives.
 
 > **Definition 1 (Strong Identifiability).** The expert functions $x \mapsto h_1(x, \kappa)$ and $x \mapsto h_2(x, \eta)$ are strongly identifiable if they are twice differentiable with respect to $\kappa$ and $\eta$, and for any distinct parameters $\kappa_1, \dots, \kappa_{k_1}$ and $\eta_1, \dots, \eta_{k_2}$, each of the following sets of functions (in $x$) consists of linearly independent functions:
@@ -1492,24 +1491,24 @@ To characterize the convergence of expert parameters, the expert functions must 
 > 2. $\left\{ \frac{\partial h_1}{\partial \kappa^{(u_1)}}(x, \kappa_i) \frac{\partial h_1}{\partial \kappa^{(v_1)}}(x, \kappa_i), 1 : i \in [k_1], u_1, v_1 \in [d_1] \right\}$
 > 3. $\left\{ \frac{\partial h_2}{\partial \eta^{(u_2)}}(x, \eta_j), \frac{\partial^2 h_2}{\partial \eta^{(u_2)} \partial \eta^{(v_2)}}(x, \eta_j), x^{(u)} \frac{\partial h_2}{\partial \eta^{(v_2)}}(x, \eta_j) : j \in [k_2], u_2, v_2 \in [d_2], u \in [d] \right\}$
 
-#### Strongly Identifiable Experts:
+#### 5.2.2.1 Strongly Identifiable Experts:
 Two-layer feed-forward networks (FFNs) of the form:
 
 $$h(x, (\theta_2, \theta_1, \theta_0)) = \theta_2 \cdot \text{GELU}\left(\theta_1^T x + \theta_0\right)$$
 
 are strongly identifiable. This property also holds for other non-linear activations like $\text{sigmoid}$ and $\text{tanh}$.
 
-#### Non-Identifiable Experts (Failure of Linear Experts):
+#### 5.2.2.2 Non-Identifiable Experts (Failure of Linear Experts):
 In contrast, standard **linear experts** $h_1(x, (\kappa_1, \kappa_0)) = \kappa_1^T x + \kappa_0$ **fail** to satisfy the strong identifiability condition. This is because their partial derivatives exhibit strict partial differential equation (PDE) relationships:
 
 $$\frac{\partial h_1}{\partial \kappa_0} \cdot \frac{\partial h_1}{\partial \kappa_0} = 1 \quad \text{and} \quad \frac{\partial h_2}{\partial \eta_1} = x \frac{\partial h_2}{\partial \eta_0}$$
 
 These PDEs introduce severe linear dependencies, causing strong parameter interactions that degrade parameter convergence rates.
 
-### 2.3 Voronoi Loss and Convergence Rates
+### 5.2.3 Voronoi Loss and Convergence Rates
 To analyze parameter convergence under over-specification (where multiple fitted experts map to a single true expert), [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) utilized the framework of Voronoi cells. For any fitted measure $G$, the atoms are grouped into Voronoi cells $V_{1,j}$ and $V_{2,j}$ centered around the true expert parameters.
 
-#### Voronoi Loss $D_1$ (For Strongly Identifiable Experts):
+#### 5.2.3.1 Voronoi Loss $D_1$ (For Strongly Identifiable Experts):
 $$D_1\left((G_1, G_2), (G_1^*, G_2^*)\right) := \sum_{j=1}^{k_1^*} \left| \sum_{i \in V_{1,j}} \omega_i - \omega_j^* \right| + \sum_{j=1}^{k_2^*} \left| \sum_{i \in V_{2,j}} \exp(\beta_{0i}) - \exp(\beta_{0j}^*) \right|$$
 
 $$+ \sum_{j: |V_{1,j}|=1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\| + |\Delta \tau_{ij}| \right) + \sum_{j: |V_{2,j}|=1} \sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\| + \|\Delta \eta_{ij}\| + |\Delta \nu_{ij}| \right)$$
@@ -1524,7 +1523,7 @@ $$\text{Shared/Routed Experts (Exactly-Specified, } |V|=1\text{): } \mathbf{\til
 
 $$\text{Shared/Routed Experts (Over-Specified, } |V|>1\text{): } \mathbf{\tilde{O}_P\left(n^{-1/4}\right)}$$
 
-#### Voronoi Loss $D_2$ (For Linear Experts):
+#### 5.2.3.2 Voronoi Loss $D_2$ (For Linear Experts):
 Due to the PDE relationships of linear experts, the parameter interactions require a modified loss $D_2$ which incorporates higher-order powers of the parameter differences:
 
 $$\sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{1ij}\|^2 + |\Delta \kappa_{0ij}|^{r_1,j} + |\Delta \tau_{ij}|^{r_1,j/2} \right)$$
@@ -1542,7 +1541,7 @@ $$\text{Linear Shared Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_1,j}\right)} 
 
 $$\text{Linear Routed Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_2,j}\right)} = \mathbf{\tilde{O}_P\left(n^{-1/12}\right)} \quad (\text{for } |V_{2,j}| = 3)$$
 
-### 2.4 Statistical Benefits of the Shared Expert Strategy
+### 5.2.4 Statistical Benefits of the Shared Expert Strategy
 The mathematical analysis reveals a profound statistical rationale for isolating shared experts:
 
 1. **Faster Parameter Convergence**: Shared experts are shared globally and are thus far less prone to high over-specification. Even when over-specified, their convergence rate is bounded at $\tilde{O}_P\left(n^{-1/4}\right)$.
@@ -1559,18 +1558,18 @@ The mathematical analysis reveals a profound statistical rationale for isolating
 
 ---
 
-## 3. Normalized Sigmoid Gating: The Sparse vs. Dense Regimes
+## 5.3 Normalized Sigmoid Gating: The Sparse vs. Dense Regimes
 
 While DeepSeek-V2 utilized standard softmax gating, DeepSeek-V3 introduced **Normalized Sigmoid Gating** for routing specialized experts. [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) proved that this gating choice leads to a **spectacular mathematical leap** in routed expert convergence.
 
-### 3.1 Gating Mechanics in DeepSeek-V3
+### 5.3.1 Gating Mechanics in DeepSeek-V3
 Under normalized sigmoid gating, the conditional density $g_{G_1^*, G_2^*}(y|x)$ is formulated as:
 
 $$g_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\sigma\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)$$
 
 where $\sigma(z) = \frac{1}{1 + \exp(-z)}$ is the sigmoid function, and $G_2^* = \sum_{i=1}^{k_2^*} \sigma(\beta_{0i}^*) \delta(\beta_{1i}^*, \eta_i^*, \nu_i^*)$.
 
-### 3.2 Sparse vs. Dense Regimes under Over-Specification
+### 5.3.2 Sparse vs. Dense Regimes under Over-Specification
 Under over-specification ($k_2 > k_2^*$), multiple fitted experts converge to a single true specialized expert. The sum of their dynamic gate weights must converge to the true expert's gate weight:
 
 $$\sum_{i \in V_{2,1}} \frac{\sigma\left((\hat{\beta}_{1i}^n)^T x + \hat{\beta}_{0i}^n\right)}{\sum_{j=1}^{k_2} \sigma\left((\hat{\beta}_{1j}^n)^T x + \hat{\beta}_{0j}^n\right)} \longrightarrow \frac{\sigma\left((\beta_{11}^*)^T x + \beta_{01}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \quad \text{a.e. } x$$
@@ -1586,7 +1585,7 @@ This constraint can only be solved easily if the over-specified gating parameter
 > [!NOTE]
 > The sparse regime is highly unrealistic in practice, as the very definition of MoE relies on dynamic, input-dependent routing. Thus, the **dense regime** is the practically relevant scenario in large-scale LLM training.
 
-### 3.3 Misspecification in the Dense Regime
+### 5.3.3 Misspecification in the Dense Regime
 In the realistic **dense regime**, the dynamic convergence equation cannot be strictly satisfied under over-specification. As a result, the ground-truth model is **misspecified**. 
 Rather than converging to the true mixing measure $G_2^*$, the MLE converges to a misspecified parameter set $\check{G}_2 \in \mathcal{G}_{k_2}(\Theta_2) \setminus \mathcal{G}_{k_2^*}(\Theta_2)$ that minimizes the Kullback-Leibler (KL) divergence to the ground-truth:
 
@@ -1594,7 +1593,7 @@ $$\check{G}_2 = \arg\min_{G_2} \text{KL}\left(g_{G_1^*, G_2^*} \ \Big\|\ g_{G_1^
 
 Importantly, because $\check{G}_2$ lies in the boundary of the over-specified space, the atoms of $\check{G}_2$ represent **distinct, well-separated parameters** $(\check{\beta}_{1j}, \check{\beta}_{0j}, \check{\eta}_j, \check{\nu}_j)$.
 
-### 3.4 Weak Identifiability Condition
+### 5.3.4 Weak Identifiability Condition
 Under normalized sigmoid gating, the required linear independence on the routed expert $h_2$ is dramatically relaxed to a first-order condition:
 
 > **Definition 2 (Weak Identifiability).** A routed expert function $x \mapsto h_2(x, \eta)$ is weakly identifiable if it is differentiable with respect to $\eta$, and for any distinct parameters $\eta_1, \dots, \eta_{k_2}$, the following set of functions (in $x$) consists of linearly independent functions:
@@ -1603,7 +1602,7 @@ Under normalized sigmoid gating, the required linear independence on the routed 
 
 Crucially, **linear experts** $h_2(x, (\eta_1, \eta_0)) = \eta_1^T x + \eta_0$ **fully satisfy** weak identifiability, even though they violate strong identifiability.
 
-### 3.5 The Voronoi Loss $D_4$ and the Parametric Leap
+### 5.3.5 The Voronoi Loss $D_4$ and the Parametric Leap
 Because the misspecified target parameters in $\check{G}_2$ are distinct and well-separated, the Taylor expansion of the density difference is performed around a point with no overlapping atoms. Consequently, the parameter interactions and higher-order polynomial complexities completely vanish!
 
 The corresponding Voronoi loss $D_4$ for the dense regime is defined as:
@@ -1620,7 +1619,7 @@ $$\text{Shared Experts (Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/4}\rig
 
 $$\text{Routed Experts (Exactly or Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$$
 
-### 3.6 Explaining the Parametric Leap: Softmax vs. Sigmoid Gating
+### 5.3.6 Explaining the Parametric Leap: Softmax vs. Sigmoid Gating
 The theoretical comparison of expert estimation rates highlights the profound sample efficiency gains of normalized sigmoid gating:
 
 | Gating Mechanism | Expert Type | Sparse / Softmax Regime | Dense Sigmoid Regime (Practical) | Sample Complexity |
@@ -1630,7 +1629,7 @@ The theoretical comparison of expert estimation rates highlights the profound sa
 | **Normalized Sigmoid** | GELU FFN | $\tilde{O}_P\left(n^{-1/4}\right)$ | $\mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$ | $\mathbf{\mathcal{O}\left(\epsilon^{-2}\right)}$ |
 | **Normalized Sigmoid** | Linear FFN | $\tilde{O}_P\left(n^{-1/12}\right)$ | $\mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$ | $\mathbf{\mathcal{O}\left(\epsilon^{-2}\right)}$ |
 
-#### The Underlying Mathematical Reason:
+#### 5.3.6.1 The Underlying Mathematical Reason:
 In standard softmax gating, the gating weights sum to $1$ globally. Under over-specification, the model can perfectly match the ground-truth distribution by splitting weights across overlapping experts. This creates a singularity where the parameters are non-identifiable, forcing the Taylor expansion to rely on higher-order derivatives, leading to complex systems of polynomial equations and extremely slow convergence rates.
 
 In **Normalized Sigmoid Gating**, the sigmoid functions act independently before normalization. In the realistic dense regime, this independent structure makes it mathematically impossible for over-specified experts to perfectly match the ground truth. This **forces a misspecification**, shifting the convergence target to a boundary point $\check{G}_2$ where the expert parameters are **strictly distinct and well-separated**. Because the parameters are separated, there is no parameter overlap, and the convergence rate collapses back to the optimal, first-order parametric rate of **$\tilde{O}_P\left(n^{-1/2}\right)$**.
@@ -1639,61 +1638,61 @@ In **Normalized Sigmoid Gating**, the sigmoid functions act independently before
 
 ---
 
-## 4. Empirical Validation and Router Dynamics
+## 5.4 Empirical Validation and Router Dynamics
 
 [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) conducted extensive empirical validation on synthetic and real-world datasets (SlimPajama and vision-language benchmarks) to verify these theoretical bounds.
 
-### 4.1 Simulated Numerical Experiments
+### 5.4.1 Simulated Numerical Experiments
 The convergence behavior of the MLE towards the true mixing measure was evaluated using the Expectation-Maximization (EM) algorithm across sample sizes $n \in [10^2, 10^5]$:
 
 * **Theorem 1 Validation (Softmax, GELU Experts)**: Under Voronoi loss $D_1$, the MLE achieved an empirical convergence rate of **$\mathcal{O}\left(n^{-0.45}\right)$**, matching the theoretical $\tilde{O}_P\left(n^{-1/4}\right)$ rate.
 * **Theorem 2 Validation (Softmax, Linear Experts)**: Under Voronoi loss $D_2$, the MLE achieved an empirical rate of **$\mathcal{O}\left(n^{-0.517}\right)$**, aligning with the polynomial interaction rate.
 * **Theorem 4 Validation (Dense Sigmoid, Linear Experts)**: Under Voronoi loss $D_4$, the MLE achieved a rapid convergence rate of **$\mathcal{O}\left(n^{-0.55}\right)$**, confirming the theoretical parametric leap to **$\tilde{O}_P\left(n^{-1/2}\right)$**.
 
-### 4.2 Language Modeling (SlimPajama) and Vision-Language Pretraining
+### 5.4.2 Language Modeling (SlimPajama) and Vision-Language Pretraining
 The four configurations—**Vanilla SMoE**, **DeepSeek-V2** (Shared + Softmax), **DeepSeek-V3** (Shared + Sigmoid), and **SMoE Sigmoid Gating** (Sigmoid, No Shared)—were trained on the SlimPajama corpus at small (158M) and large (679M) scales:
 
 * **Downstream Zero-Shot Accuracy**: DeepSeek-V3 and DeepSeek-V2 consistently outperformed Vanilla SMoE, achieving a lower perplexity and higher zero-shot accuracy.
 * **Convergence Acceleration**: The DeepSeek variants achieved the final task performance of Vanilla SMoE using only **$70\% \text{ to } 80\%$** of the total training steps, empirically demonstrating the sample efficiency of the shared expert strategy.
 * **Sigmoid Superiority**: Integrating Sigmoid Gating alone (SMoE Sigmoid Gating) achieved a convergence rate and final performance closely matching DeepSeek-V2, showing the power of the gating mechanism. DeepSeek-V3 (combining both Shared Experts and Sigmoid Gating) achieved the highest overall performance and fastest convergence.
 
-### 4.3 Router Saturation
+### 5.4.3 Router Saturation
 **Router Saturation** measures the proportion of expert routing decisions that have converged to their final state at an intermediate checkpoint $t$ relative to the final checkpoint $T$:
 
 $$\text{Router Saturation}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t) \cap E_i(T) \right|}{K_r}$$
 
 where $E_i(t)$ is the set of active experts for the $i$-th token at checkpoint $t$.
 
-#### Key Findings:
+#### 5.4.3.1 Key Findings:
 * **Sigmoid-Gated Faster Saturation**: Models equipped with normalized sigmoid gating (DeepSeek-V3 and SMoE Sigmoid Gating) exhibit significantly steeper saturation curves compared to softmax-gated models. After just $5\%$ of training, **$\sim 60\%$** of routing decisions had already saturated.
 * **Layer-wise Profile**: Later layers saturate significantly earlier than initial layers. Under normalized sigmoid gating, the layer-wise saturation profile is highly uniform, indicating that sigmoid routing stabilizes the entire network's allocation faster.
 
-### 4.4 Router Change Rate
+### 5.4.4 Router Change Rate
 To measure routing volatility, the **Router Change Rate** calculates the fraction of active experts that fluctuate between consecutive checkpoints $t$ and $t+1$:
 
 $$\text{Router Change Rate}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t+1) \setminus E_i(t) \right|}{K_r}$$
 
-#### Key Findings:
+#### 5.4.4.1 Key Findings:
 * **Volatily Suppression**: Models using normalized sigmoid gating exhibit a **significantly lower change rate** throughout training. This suppresses the "routing fluctuation" problem, ensuring that specialized experts receive a stable stream of similar tokens, which is crucial for deep parameter specialization.
 * **Steady Specialization**: Later layers maintain highly stable routing with negligible fluctuations, fostering an optimal environment for expert parameter convergence.
 
-### 4.5 Expert Utilization (Jain's Fairness Index)
+### 5.4.5 Expert Utilization (Jain's Fairness Index)
 To measure the load-balance and determine if any experts are under-utilized or collapsing, **Jain's Fairness Index** is applied to the expert utilization vector $\mathbf{R} = (r_1, \dots, r_{N_r})$:
 
 $$J(\mathbf{R}) = \frac{\left( \sum_{i=1}^{N_r} r_i \right)^2}{N_r \sum_{i=1}^{N_r} r_i^2}$$
 
 where $r_i$ is the proportion of total tokens routed to expert $i$. $J(\mathbf{R}) \in [1/N_r, 1]$, where $1$ represents perfectly uniform utilization.
 
-#### Key Findings:
+#### 5.4.5.1 Key Findings:
 * **Sigmoids Prevent Collapse**: Models with normalized sigmoid gating maintain a **significantly higher fairness index** across all layers, particularly in the later layers of the model. This guarantees that the fine-grained routed experts are utilized evenly, preventing routing collapse without relying on destructive auxiliary balance penalties.
 
 ---
 
-## 5. Practical Implementation and Parallelism Strategies
+## 5.5 Practical Implementation and Parallelism Strategies
 
 While fine-grained routing and shared experts offer massive statistical advantages, they introduce substantial engineering challenges, particularly regarding **communication overheads** and **load imbalance** during distributed training. DeepSeek-V2 implemented several innovative systems solutions to address these.
 
-### 5.1 Device-Limited Routing
+### 5.5.1 Device-Limited Routing
 When employing Expert Parallelism (EP), routed experts are sharded across different devices. For a given token, its communication frequency is proportional to the number of distinct devices its active experts reside on. Due to the fine-grained segmentation in DeepSeekMoE, a token activating $K_r = 6$ experts could potentially communicate with $6$ different devices, leading to prohibitive All-to-All communication latency.
 
 To bound this communication overhead, DeepSeek-V2 employs **Device-Limited Routing**:
@@ -1702,7 +1701,7 @@ To bound this communication overhead, DeepSeek-V2 employs **Device-Limited Routi
 
 Empirically, setting **$M \ge 3$** achieves downstream performance that is virtually indistinguishable from unrestricted top-$K_r$ routing, while strictly bounding the communication latency to at most $3$ destinations.
 
-### 5.2 Auxiliary Load Balancing Losses
+### 5.5.2 Auxiliary Load Balancing Losses
 To maintain high hardware utilization and prevent routing collapse, DeepSeek-V2 incorporates three distinct balance losses:
 
 1. **Expert-Level Balance Loss ($L_{\text{ExpBal}}$)**: Mitigates the risk of individual expert collapse:
@@ -1719,13 +1718,13 @@ To maintain high hardware utilization and prevent routing collapse, DeepSeek-V2 
 
 During pretraining, these balance coefficients are set to $\alpha_1 = 0.003$, $\alpha_2 = 0.05$, and $\alpha_3 = 0.02$.
 
-### 5.3 Token-Dropping Strategy
+### 5.5.3 Token-Dropping Strategy
 To handle extreme load spikes on individual devices without stalling the entire training pipeline, DeepSeek-V2 utilizes a device-level token-dropping strategy. 
 * The system allocates a strict computational budget corresponding to a capacity factor of $1.0$ per device.
 * If a device receives more tokens than its budget, tokens with the lowest affinity scores are dropped.
 * To prevent severe performance degradation on individual sequences, **$10\%$ of sequences** are flagged as "safe" and their tokens are never dropped.
 
-### 5.4 Parallelism and Overlapping Computation
+### 5.5.4 Parallelism and Overlapping Computation
 DeepSeek-V2 is trained using a highly optimized distributed paradigm:
 * **Zero-Bubble Pipeline Parallelism (16-way)** and **Expert Parallelism (8-way)** are combined with ZeRO-1 Data Parallelism.
 * **Computation Overlapping**: The heavy All-to-All communication required for specialized routed experts is overlapped directly with the local forward-pass computation of the always-active **shared experts**. Because the shared experts are executed locally on every device, their computation does not require network transfers, providing a perfect communication hide.
@@ -1733,7 +1732,7 @@ DeepSeek-V2 is trained using a highly optimized distributed paradigm:
 
 ---
 
-## 6. Discussion and Open Questions
+## 5.6 Discussion and Open Questions
 
 The mathematical and empirical success of DeepSeekMoE's shared & specialized expert design leaves several promising avenues for future research:
 
@@ -1743,7 +1742,7 @@ The mathematical and empirical success of DeepSeekMoE's shared & specialized exp
 
 ---
 
-## References
+## 5.7 References
 
 * **Shazeer et al. 2017**: *Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer.* [[PDF Link](https://arxiv.org/abs/1701.06538)]
 * **Lepikhin et al. 2020 (GShard)**: *GShard: Scaling Giant Models with Conditional Computation and Automatic Sharding.* [[PDF Link](https://arxiv.org/abs/2006.16668)]
@@ -1756,7 +1755,7 @@ The mathematical and empirical success of DeepSeekMoE's shared & specialized exp
 ---
 
 
-# Section 6: Load Balancing, Router Regularization, and Training Stability {#section-6-load-balancing-router-regularization-and-training-stability}
+# Section 6: Load Balancing, Router Regularization, and Training Stability
 
 Sparsely-Gated Mixture-of-Experts (MoE) models represent a paradigm shift in deep learning scaling, enabling models to absorb trillions of parameters at near-constant computational cost per token. However, this capacity expansion introduces major optimization challenges. Unlike dense architectures, where gradient flow is continuous and uniform across all parameters, sparse MoE architectures rely on dynamic, discrete routing decisions. This dynamic routing introduces three fundamental issues:
 1. **Load Imbalance**: The gating network naturally tends to converge to a degenerate state where a tiny subset of "favorite" experts receives the vast majority of tokens. This creates a self-reinforcing feedback loop—favored experts are updated more frequently and become highly specialized, while other experts remain under-trained and under-utilized.
@@ -1767,11 +1766,11 @@ This section provides a rigorous mathematical and engineering analysis of the lo
 
 ---
 
-## 1. The Evolution of Auxiliary Load-Balancing Losses
+## 6.1 The Evolution of Auxiliary Load-Balancing Losses
 
 To enforce equal expert utilization and prevent load imbalance, deep learning researchers have designed increasingly refined auxiliary loss terms. These terms are added to the primary objective (e.g., cross-entropy loss) and minimized jointly during training.
 
-### 1.1 Shazeer et al. 2017: Noisy Top-K & Soft Constraints
+### 6.1.1 Shazeer et al. 2017: Noisy Top-K & Soft Constraints
 
 In their seminal work, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) pioneered the sparsely-gated MoE layer using **Noisy Top-K Gating**. To prevent routing collapse, they introduced two distinct soft constraints: $L_{\text{importance}}$ and $L_{\text{load}}$.
 
@@ -1809,7 +1808,7 @@ In their seminal work, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) p
                        +-----------------------+     +-----------------------+
 ```
 
-#### Mathematical Formulation of Noisy Top-K Gating
+#### 6.1.1.1 Mathematical Formulation of Noisy Top-K Gating
 Before applying the softmax activation, tunable Gaussian noise is added to the gating logits. Only the top $k$ values are retained; all other components are set to $-\infty$, zeroing out the corresponding gate values after normalization:
 
 $$H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}((x \cdot W_{\text{noise}})_i)$$
@@ -1820,7 +1819,7 @@ $$\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the 
 
 where $\epsilon \sim \mathcal{N}(0, 1)$ is standard normal noise generated at each forward step.
 
-#### The Importance Loss ($L_{\text{importance}}$)
+#### 6.1.1.2 The Importance Loss ($L_{\text{importance}}$)
 The "importance" of an expert $i$ over a batch of input representations $X$ is defined as the sum of its gate values across the batch:
 
 $$\text{Importance}(X) = \sum_{x \in X} G(x)$$
@@ -1835,7 +1834,7 @@ $$\text{CV}(v)^2 = \frac{\text{Var}(v)}{\mu(v)^2} = \frac{\frac{1}{N} \sum_{i=1}
 
 This loss is minimized (yielding $0$) when all experts receive exactly equal average gating scores across the batch ($\text{Importance}(X)_i = \bar{v}$ for all $i$).
 
-#### The Load Loss ($L_{\text{load}}$)
+#### 6.1.1.3 The Load Loss ($L_{\text{load}}$)
 While $L_{\text{importance}}$ balances gating weights, experts can still receive highly uneven distributions of tokens (e.g., one expert receives a few examples with very large gate weights, while another receives many examples with tiny weights). This causes memory bottlenecks and device under-utilization on distributed hardware. 
 
 To solve this, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) introduced $L_{\text{load}}$. The number of tokens assigned to an expert is a discrete quantity, which is non-differentiable. To allow backpropagation, they formulated a smooth, differentiable estimator of the load based on the probability $P(x, i)$ that $H(x)_i$ falls in the top $k$ components of $H(x)$.
@@ -1856,7 +1855,7 @@ The load loss is the squared coefficient of variation of this load vector:
 
 $$L_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2$$
 
-### 1.2 Lepikhin et al. 2020 (GShard): Group-Level Top-2 Gating and the stop_gradient Trick
+### 6.1.2 Lepikhin et al. 2020 (GShard): Group-Level Top-2 Gating and the stop_gradient Trick
 
 To scale massively multilingual Transformers, [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668) shifted to a **Group-Level Top-2 Gating** routing mechanism. They introduced two critical improvements:
 1. **Expert Capacity Constraints**: The number of tokens routed to a single expert is strictly capped. If the total number of tokens in a batch is $N$, and each token is routed to at most two experts, the expert capacity per group is bounded by $O(N/E)$.
@@ -1896,7 +1895,7 @@ Increment Count(e1) = Count(e1) + 1                                       Increm
                          * m_e is the fully differentiable mean gate weight
 ```
 
-#### GShard Auxiliary Loss Formulation
+#### 6.1.2.1 GShard Auxiliary Loss Formulation
 Since the discrete dispatching counts $c_e$ (the number of times expert $e$ is chosen as the first or second candidate) are non-differentiable, [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668) introduced a mathematical formulation that uses the `stop_gradient` trick to decouple the discrete dispatch selection from the continuous gating probabilities. 
 
 Let $m_e$ represent the average routing probability assigned to expert $e$ across the group of tokens:
@@ -1909,7 +1908,7 @@ $$\ell_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \left(\text{sg}\left[\frac{c_e}{S
 
 where $\text{sg}[\cdot]$ denotes the `stop_gradient` operator. Minimizing this product forces the differentiable probability mass $m_e$ to follow the empirical load distribution. If an expert receives a large fraction of tokens ($\frac{c_e}{S}$ is high), its gating probability $m_e$ is penalized heavily, shifting routing probability to other, under-utilized experts.
 
-### 1.3 Fedus et al. 2021 (Switch Transformers): Top-1 Routing and Scale-Invariant Loss
+### 6.1.3 Fedus et al. 2021 (Switch Transformers): Top-1 Routing and Scale-Invariant Loss
 
 [Fedus et al. 2021 (Switch Transformers)](https://arxiv.org/abs/2101.03961) simplified the routing mechanism by selecting only the single best expert ($k=1$). By routing to a single expert, they reduced the routing computation, decreased the communication payload of the `all-to-all` cross-device exchanges, and cut the required expert capacity buffer size in half.
 
@@ -1928,7 +1927,7 @@ $$P_i = \frac{1}{T} \sum_{x \in B} p_i(x)$$
 
 - $\alpha$ is a scaling hyperparameter (empirically set to $10^{-2}$ or $0.01$).
 
-#### Mathematical Proof of Scale Invariance
+#### 6.1.3.1 Mathematical Proof of Scale Invariance
 Under perfect routing balance, all experts receive exactly the same number of tokens, and the gating probabilities are uniform:
 
 $$f_i = \frac{1}{N} \quad \text{and} \quad P_i = \frac{1}{N} \quad \forall i \in \{1, \dots, N\}$$
@@ -1941,11 +1940,11 @@ By multiplying the dot-product $\sum f_i P_i$ by the expert count $N$, the loss 
 
 ---
 
-## 2. Advanced Stabilization Techniques for Ultra-Scale MoE Models
+## 6.2 Advanced Stabilization Techniques for Ultra-Scale MoE Models
 
 As models scale to hundreds of billions of parameters, training dynamics become increasingly volatile. [Zoph et al. 2022 (ST-MoE)](https://arxiv.org/abs/2202.08906) conducted a systematic investigation of these instabilities. They showed that while certain architectural variations (like GEGLU activations and RMS Normalization scale parameters) provide large quality boosts, they also exacerbate training instability. 
 
-### 2.1 The Softmax Gating Exploding Logit Problem
+### 6.2.1 The Softmax Gating Exploding Logit Problem
 
 The routing decisions in sparse models rely heavily on exponentiation within the softmax function. In lower-precision formats like bfloat16, numerical roundoff errors are up to $65,536\times$ larger than in float32. When the routing logits $x \in \mathbb{R}^{B \times N}$ grow large, these roundoff errors are amplified exponentially.
 
@@ -1953,11 +1952,11 @@ $$\text{Softmax}(x)_k = \frac{e^{x_k - x_{\max}}}{\sum_j e^{x_j - x_{\max}}}$$
 
 If the logits $x$ have large absolute magnitudes, minor perturbations due to bfloat16 roundoff errors drastically alter the resulting routing probabilities. This triggers discrete routing shifts, leading to token dropping and sudden loss spikes. 
 
-### 2.2 The Router z-loss
+### 6.2.2 The Router z-loss
 
 To solve this, [Zoph et al. 2022 (ST-MoE)](https://arxiv.org/abs/2202.08906) introduced the **Router z-loss**, which stabilizes training by penalizing large inputs to the softmax activation function.
 
-#### Mathematical Formulation
+#### 6.2.2.1 Mathematical Formulation
 Given a batch of $B$ tokens, $N$ experts, and $x \in \mathbb{R}^{B \times N}$ representing the pre-softmax logits entering the gating network:
 
 $$L_z(x) = \frac{1}{B} \sum_{i=1}^B \left( \log \sum_{j=1}^N e^{x_{i,j}} \right)^2$$
@@ -1968,32 +1967,32 @@ $$L_{\text{total}} = L_{\text{CE}} + c_B L_B + c_z L_z$$
 
 where $L_{\text{CE}}$ is the cross-entropy loss, $L_B$ is the auxiliary load-balancing loss with coefficient $c_B$, and $L_z$ is the router z-loss with coefficient $c_z$ (empirically set to $10^{-3}$ or $0.001$).
 
-#### Router z-loss vs. Naive Logit Clipping
+#### 6.2.2.2 Router z-loss vs. Naive Logit Clipping
 One might assume that the z-loss can be replaced by simple logit clipping (e.g., capping $|x_{i,j}| \le \text{threshold}$). However, as analyzed by [Zoph et al. 2022 (ST-MoE)](https://arxiv.org/abs/2202.08906), logit clipping is mathematically inferior for two reasons:
 1. **Discontinuities**: Hard clipping introduces sharp mathematical discontinuities in the loss landscape, generating zero-valued gradients inside the clipped region and impeding gating parameter updates.
 2. **Post-error Application**: Clipping acts as a hard ceiling applied *after* roundoff errors have occurred. In contrast, the z-loss acts as a smooth, continuous regularization term that encourages the model to naturally output small, well-bounded logits, preserving numerical precision during the forward pass.
 
-### 2.3 Input Jitter
+### 6.2.3 Input Jitter
 
 To smooth the routing landscape and promote exploration of non-dominant experts early in training, [Fedus et al. 2021](https://arxiv.org/abs/2101.03961) introduced **Input Jitter**. 
 
-#### Mechanism
+#### 6.2.3.1 Mechanism
 Input Jitter injects multiplicative uniform noise directly into the input representations before they enter the gating network. The input $x$ is modulated as follows:
 
 $$x_{\text{jitter}} = x \cdot U(1 - \epsilon, 1 + \epsilon)$$
 
 where $\epsilon$ is a noise scale hyperparameter (typically set to $10^{-2}$ or $10^{-1}$).
 
-#### Evaluation at Scale
+#### 6.2.3.2 Evaluation at Scale
 While input jitter is highly effective in stabilizing smaller models, [Zoph et al. 2022 (ST-MoE)](https://arxiv.org/abs/2202.08906) discovered that at massive scales (XL/XXL scale and beyond), the noise injected by input jitter degrades model representation learning and hurts downstream performance. Consequently, they recommended ablating input jitter in ultra-large MoE configurations and relying on the z-loss for numerical stabilization.
 
 ---
 
-## 3. Numerical Precision, Memory, and Communication Tradeoffs
+## 6.3 Numerical Precision, Memory, and Communication Tradeoffs
 
 Efficiently training sparsely-gated MoEs on modern accelerators requires balancing numerical stability with training speed. This section analyzes **Selective Precision** and the tradeoffs of distributed routing.
 
-### 3.1 Selective Precision
+### 6.3.1 Selective Precision
 
 Mixed-precision pipelines commonly use bfloat16 for matrix multiplications and activation storage, while master weights are kept in float32. 
 
@@ -2039,7 +2038,7 @@ To resolve this conflict, [Fedus et al. 2021 (Switch Transformers)](https://arxi
 
 This selective precision approach provides the numerical stability of float32 gating without increasing the inter-device network communication payload.
 
-### 3.2 Engineering Tradeoff Matrix
+### 6.3.2 Engineering Tradeoff Matrix
 
 The selection of the routing algorithm (Top-1 vs. Top-2), numerical precision format, and capacity factor (CF) creates direct trade-offs between FLOP efficiency, memory bandwidth, and network communication volume:
 
@@ -2053,7 +2052,7 @@ The selection of the routing algorithm (Top-1 vs. Top-2), numerical precision fo
 
 ---
 
-## 4. Diagnosing MoE Training Health & Debugging Protocols
+## 6.4 Diagnosing MoE Training Health & Debugging Protocols
 
 Maintaining healthy training runs at massive scale requires continuous monitoring of specialized metrics. This section outlines the key performance indicators (KPIs) and debugging protocols for large-scale MoE architectures.
 
@@ -2083,7 +2082,7 @@ Maintaining healthy training runs at massive scale requires continuous monitorin
             * Tighten router z-loss (c_z)
 ```
 
-### 4.1 Key Metrics to Monitor
+### 6.4.1 Key Metrics to Monitor
 
 1. **Token Overflow / Drop Rate (Target: $<1.0\%$)**
    - **Definition**: The percentage of tokens that exceed the allocated expert capacity $C$ and bypass the MoE layer via the residual connection without expert computation.
@@ -2104,7 +2103,7 @@ $$x_{\max} = \max_{i,j} |x_{i,j}|$$
    - **Definition**: The empirical coefficient of variation (CV) of the token counts dispatched to each expert.
    - **Diagnostic Value**: A rising CV indicates that the load is becoming unbalanced across devices, which degrades training throughput and increases execution step times.
 
-### 4.2 Systematic Debugging and Mitigation Recipes
+### 6.4.2 Systematic Debugging and Mitigation Recipes
 
 When training anomalies or loss divergences occur, the following interventions should be applied:
 
@@ -2129,7 +2128,7 @@ $$\sigma = 0.1 \times \sqrt{\frac{1}{n_{\text{in}}}}$$
 ---
 
 
-# Section 7: Systems & Distributed Compilation at Scale: GShard and Expert Parallelism {#section-7-systems-distributed-compilation-at-scale-gshard-and-expert-parallelism}
+# Section 7: Systems & Distributed Compilation at Scale: GShard and Expert Parallelism
 
 In the pursuit of scaling deep learning architectures, dense models eventually hit a hard wall of physical hardware constraints. A single modern accelerator is restricted by its high-bandwidth memory (HBM) capacity, typically limiting the parameter size of a standard dense model to under 10–20 billion parameters without employing model parallel strategies. 
 
@@ -2141,7 +2140,7 @@ This section explores the groundbreaking system design and compilation mechanics
 
 ---
 
-## 1. The GShard Architectural Formulation & Mixture of Experts Layer
+## 7.1 The GShard Architectural Formulation & Mixture of Experts Layer
 
 GShard implements a sparsely scaled Transformer architecture by replacing every other position-wise feed-forward network (FFN) layer with a Sparsely-Gated Mixture-of-Experts (MoE) layer in both the encoder and the decoder. While the self-attention layer remains replicated on all devices to capture global sequence context, the MoE layers are sharded across the cluster.
 
@@ -2166,7 +2165,7 @@ GShard implements a sparsely scaled Transformer architecture by replacing every 
                                                            +-----------------+
 ```
 
-### 1.1 Mathematical Formulation of the Gating Network
+### 7.1.1 Mathematical Formulation of the Gating Network
 The original sparsely-gated Mixture-of-Experts formulation ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)) routes tokens to the top-$k$ experts selected from a total pool of $E$ experts. GShard builds upon this with a highly optimized top-2 gating network that incorporates several mechanisms tailored specifically for training efficiency and load balancing at cluster scale.
 
 For each token $x_s$, the gating network computes a sparse weight vector $G_{s}$ over the experts:
@@ -2181,7 +2180,7 @@ The output of the MoE layer $y_s$ is the weighted sum of the activations returne
 
 $$y_s = \sum_{e=1}^E G_{s,e} \cdot FFN_e(x_s)$$
 
-### 1.2 Group-Level Top-2 Gating with Auxiliary Loss
+### 7.1.2 Group-Level Top-2 Gating with Auxiliary Loss
 To scale efficiently to thousands of devices, a sequential gating mechanism is a massive bottleneck. GShard partitions the global training batch of $N$ tokens into $G$ physical groups, so that each group has exactly $S = N/G$ tokens. GShard's gating algorithm (Algorithm 1) runs independently and in parallel across all groups.
 
 The algorithm must satisfy two core systems design requirements:
@@ -2190,7 +2189,7 @@ The algorithm must satisfy two core systems design requirements:
 
 To achieve this, GShard implements a multi-stage load-balancing policy:
 
-#### 1. Expert Capacity Constraints
+#### 7.1.2.1 Expert Capacity Constraints
 For a total batch of $N$ tokens and $E$ experts, each expert has an enforced capacity limit on the maximum number of tokens it is allowed to process. Assuming each token is routed to at most 2 experts, the ideal balanced distribution assigns $2N/E$ tokens to each expert. 
 
 At the group level, each group is allocated a fractional capacity $C$:
@@ -2199,7 +2198,7 @@ $$C = \text{round}\left(m \cdot \frac{2N}{G \cdot E}\right) = O\left(\frac{S}{E}
 
 where $m \ge 1.0$ is a capacity slack factor (typically $1.0$ to $1.5$) to accommodate local statistical variances in token routing distributions. GShard keeps a running counter $c_e$ of tokens dispatched to each expert $e$. If both the first and second-choice experts selected by a token have reached their capacity $C$, the token is designated as **overflown**. An overflown token bypasses the expert computation entirely; its representation $x_s$ is passed directly to the next layer through the residual connection, and its corresponding entry in $G_s$ is zeroed out.
 
-#### 2. Differentiable Auxiliary Loss ($\ell_{\text{aux}}$)
+#### 7.1.2.2 Differentiable Auxiliary Loss ($\ell_{\text{aux}}$)
 Because the hard selection of experts (e.g., `top-2`) is a non-differentiable operation, standard gradient descent cannot directly optimize the routing network to balance load. GShard defines an auxiliary loss term $\ell_{\text{aux}}$ added to the primary objective $L = \ell_{\text{nll}} + k \cdot \ell_{\text{aux}}$ (with $k$ usually set to a small constant like $0.01$).
 
 The auxiliary loss is computed over a group of size $S$ and $E$ experts as:
@@ -2216,7 +2215,7 @@ $$g_{s} = \text{softmax}(W_g \cdot x_s)$$
 
 By multiplying the constant, non-differentiable count fraction $\frac{c_e}{S}$ with the differentiable average probability $m_e$, the optimizer can compute gradients with respect to the routing weights $W_g$. Minima of this quadratic formulation are achieved when both $c_e$ and $m_e$ are uniformly distributed across all experts, driving the routing network towards a balanced state.
 
-#### 3. Random Routing
+#### 7.1.2.3 Random Routing
 To conserve expert capacity, GShard introduces a probabilistic element to the selection of the second-best expert. The first-best expert $e_1$ is selected deterministically based on the largest softmax gate weight $g_1$. However, the second-best expert $e_2$ (with weight $g_2$) is only selected with a probability proportional to its relative weight:
 
 $$P(\text{dispatch to } e_2) = \min(1.0, 2 \cdot g_2')$$
@@ -2225,7 +2224,7 @@ where $g_2' = g_2 / (g_1 + g_2)$. If the second gate value is negligible, it is 
 
 ---
 
-## 2. Linear Algebra Formulation of the MoE Forward Pass
+## 7.2 Linear Algebra Formulation of the MoE Forward Pass
 
 To run efficiently on hardware accelerators like Google's Tensor Processing Units (TPUs), the entire gating, dispatching, expert computation, and combination stages must be expressed as highly parallel linear algebra operations. GShard heavily leverages **Einstein Summation Notation** (`einsum`) to represent these multi-dimensional tensor operations.
 
@@ -2266,7 +2265,7 @@ expert_outputs = einsum("EGCH, EHM -> GECM", h, wo)
 outputs = einsum("GSEC, GECM -> GSM", combine_weights, expert_outputs)
 ```
 
-### 2.1 Mathematical Proof of Per-Device FLOPS Complexity
+### 7.2.1 Mathematical Proof of Per-Device FLOPS Complexity
 Let us analyze the computational scaling of Algorithm 2 as we scale the number of devices $D$. We assume:
 * The training batch size scales linearly with the number of devices, keeping the tokens per device constant: $\frac{N}{D} = O(1)$.
 * The number of groups is proportional to the device count: $G = O(D)$, meaning the tokens per group is constant: $S = \frac{N}{G} = O(1)$.
@@ -2293,18 +2292,18 @@ The only term scaling with $D$ is the per-device softmax projection: $\text{FLOP
 
 ---
 
-## 3. Separation of Concerns: GShard's Lightweight Annotation APIs
+## 7.3 Separation of Concerns: GShard's Lightweight Annotation APIs
 
 A fundamental design principle of GShard is the complete separation of the logical model description from the actual physical execution and partitioning strategy on the hardware cluster. Model developers write code assuming a single, unified device with infinite memory. They partition the model by placing lightweight annotations on key tensors.
 
-### 3.1 GShard Sharding APIs
+### 7.3.1 GShard Sharding APIs
 GShard introduces three core primitive APIs:
 
 * **`replicate(tensor)`:** Annotates a tensor to be replicated across all physical devices. This is used for non-MoE weights (attention matrices, layer normalization parameters) to ensure data-parallel execution.
 * **`split(tensor, split_dimension, num_partitions)`:** Partitions a tensor along a specific dimension across `num_partitions` devices. For example, splitting a batch tensor along dimension 0 partitions the batch across the data-parallel workers.
 * **`shard(tensor, device_assignment)`:** Generalizes the `split` API to support multi-dimensional sharding. The `device_assignment` is a multi-dimensional array representing the physical grid of accelerators (e.g., a 2D grid of $2 \times 4$ TPUs).
 
-### 3.2 Automatic Sharding Propagation
+### 7.3.2 Automatic Sharding Propagation
 Developers are not required to annotate every single tensor in a computational graph. The developer typically annotates only a few crucial inputs, weights, or outputs. The XLA compiler then runs an **iterative data-flow analysis** to propagate sharding choices throughout the rest of the graph:
 
 ```
@@ -2324,7 +2323,7 @@ Developers are not required to annotate every single tensor in a computational g
 
 Starting from the user annotations, the compiler propagates sharding properties across operators (elementwise operations, transposes, reductions, activations) to minimize the insertion of resharding operations (cross-device copies). The objective is to align adjacent operations to share the same physical layouts.
 
-### 3.3 Escape Hatch: Mixing Manual and Automatic SPMD Sharding
+### 7.3.3 Escape Hatch: Mixing Manual and Automatic SPMD Sharding
 While automatic propagation handles standard layer configurations, compilers can be overly conservative due to a lack of run-time semantic knowledge. For example, standard intermediate representations like XLA HLO or TensorFlow operations do not convey whether index arrays in a `Gather` operator are strictly bounded within local partitions. 
 
 To prevent the compiler from generating unnecessary and expensive all-to-all communication patterns, GShard allows developers to escape automatic sharding. The user can manually partition an operator locally, and then switch back to the automatic pipeline.
@@ -2365,7 +2364,7 @@ data = manual_to_auto_spmd_partition(partitioned_data)
 
 ---
 
-## 4. The XLA SPMD Partitioner & Distributed Compilation
+## 7.4 The XLA SPMD Partitioner & Distributed Compilation
 
 Historically, massive model scaling relied on **Multiple Program Multiple Data (MPMD)** execution models, where compilers generated unique binaries for each device. This MPMD approach suffered from severe scaling bottlenecks:
 * The compilation time scaled linearly $O(D)$ with device count.
@@ -2374,7 +2373,7 @@ Historically, massive model scaling relied on **Multiple Program Multiple Data (
 
 GShard completely bypasses this by implementing a **Single Program Multiple Data (SPMD)** partitioner in the XLA compiler. The SPMD partitioner takes the logical, annotated graph and generates a **single, unified binary** that is loaded and executed in parallel on all devices. Each device executes the same instructions, operating on its local slice of the data, and using its physical partition ID (provided at runtime) to handle routing offsets. Consequently, compiler graph size and compilation times are kept entirely constant $O(1)$, independent of the physical cluster size.
 
-### 4.1 Collective Communication Primitives
+### 7.4.1 Collective Communication Primitives
 Because SPMD enforces that every device runs identical code, all cross-device communication must occur via highly regular, synchronous MPI-style collective operators:
 
 | Collective Primitive | Description | Systems Role in MoE |
@@ -2384,10 +2383,10 @@ Because SPMD enforces that every device runs identical code, all cross-device co
 | `AllReduce` | Performs an element-wise reduction (e.g., sum, max) across inputs from all participants, broadcasting the result. | Aggregates gradients from replicated weights or combines partially reduced intermediate tensors. |
 | `AllToAll` | Logically splits each device's input tensor along one dimension, distributes the split pieces to their target devices, and concatenates received pieces along a different dimension. | **The primary MoE engine.** Redistributes tokens from the data-parallel layout (group-sharded) to the expert-parallel layout (expert-sharded). |
 
-### 4.2 Einsum Case Study: Compiler-Driven Communication Insertion
+### 7.4.2 Einsum Case Study: Compiler-Driven Communication Insertion
 To illustrate how the XLA SPMD partitioner automatically injects these communication primitives, consider three distinct physical scenarios generated during high-dimensional Einsum operations:
 
-#### 1. Resharding (All-to-All)
+#### 7.4.2.1 Resharding (All-to-All)
 During MoE token dispatch, the compiler must perform a matrix transformation where the token tensor's sharding dimension switches from the data group dimension ($G$) to the expert dimension ($E$). 
 
 Since both operands are sharded on different dimensions, the compiler automatically schedules local intermediate compute, inserts a highly optimized `AllToAll` collective to route the slices across the network interconnect, and then runs the final local tensor layouts.
@@ -2396,7 +2395,7 @@ Since both operands are sharded on different dimensions, the compiler automatica
 [Tokens (Sharded by Group G)] ---> [Local Intermediate Einsum] ---> [All-to-All Resharding] ---> [Tokens (Sharded by Expert E)]
 ```
 
-#### 2. Accumulating Partial Results (All-Reduce)
+#### 7.4.2.2 Accumulating Partial Results (All-Reduce)
 If an Einsum contracting dimension (the dimension being summed over, such as the inner dimension of a matrix multiplication) is sharded across devices, each device can only compute a partial, incomplete local sum:
 
 $$\text{Output}_{\text{local}} = \text{LHS}_{\text{partitioned}} \times \text{RHS}_{\text{partitioned}}$$
@@ -2409,7 +2408,7 @@ Recognizing this, the compiler automatically inserts an `AllReduce-Sum` collecti
 [RHS (Sharded on Contracting Dim)] /
 ```
 
-#### 3. Slicing in a Loop (Collective-Permute)
+#### 7.4.2.3 Slicing in a Loop (Collective-Permute)
 When operands are sharded along non-contracting dimensions, executing the global operation directly would require replicated operand storage. If a partitioned weight matrix is too large to fit into an accelerator's local HBM, an `AllGather` to replicate the weight is impossible.
 
 In this scenario, the XLA partitioner implements a distributed version of **Cannon's Matrix Multiplication Algorithm**. It establishes a virtual ring topology across the devices. It inserts a bounded `while` loop that dynamically shifts activation slices around the device ring using `CollectivePermute`, calculating local matrix sub-blocks incrementally and writing results using `DynamicUpdateSlice`. This guarantees execution without ever staging full-sized tensors in local memory.
@@ -2423,17 +2422,17 @@ In this scenario, the XLA partitioner implements a distributed version of **Cann
       +----------------------------+       +----------------------------+        +----------------------------+
 ```
 
-### 4.3 Handling Complex Operators & Halo Exchanges
+### 7.4.3 Handling Complex Operators & Halo Exchanges
 To support general neural workloads (like image models or convoluted token embeddings) without modifying the model shape specifications, the SPMD compiler has to resolve complex boundary issues:
 
-#### Uneven Partitioning & Static Shapes
+#### 7.4.3.1 Uneven Partitioning & Static Shapes
 XLA compiler operations require strictly static tensor shapes to run efficiently on TPUs. However, if a dimension $L$ is partitioned across $D$ devices and $L$ is not evenly divisible by $D$, the split sizes are irregular. The partitioner resolves this by rounding the local partition shape up to the nearest multiple of $D$:
 
 $$\text{Shape}_{\text{partition}} = \text{ceil}\left(\frac{L}{D}\right)$$
 
 Any padding regions are filled with garbage data. To prevent this garbage data from corrupting numerical correctness during downstream reductions (such as `Reduce-Add`), the partitioner automatically generates mask tensors. It uses a combination of `Iota` operations, physical `PartitionId` offsets, and comparison predicates to dynamic-select the identity value (e.g., zero for addition) in the padded regions prior to executing collectives.
 
-#### Halo Exchanges in Window-Based Operators
+#### 7.4.3.2 Halo Exchanges in Window-Based Operators
 In windowed operations such as convolutions or spatial pooling, sliding windows cross the physical boundaries of device partitions. To resolve this, neighboring devices must exchange overlapping boundary data, known as **halos**.
 
 ```
@@ -2450,7 +2449,7 @@ To coordinate halo exchanges dynamically under a strictly unified SPMD program, 
 3. **Local Dynamic Slicing:** Since some boundary partitions (such as the leftmost and rightmost accelerators in a mesh) require fewer halo elements than the physical maximum, each device computes its exact dynamic slice using its runtime `PartitionId` and extracts the precise valid region.
 4. **Masking:** Any out-of-bounds padding elements are zeroed out via dynamic predicates.
 
-#### Base Dilation Challenges
+#### 7.4.3.3 Base Dilation Challenges
 When convolutions incorporate base dilation (inserting spacing/holes between elements in the input), coordinating spatial partitioning becomes highly complex. If the stride and partitioning size are not perfectly divisible by the dilation factor, different partitions will start their window computations at different relative spatial phase shifts, which cannot be expressed statically in a uniform SPMD program.
 
 GShard resolves this through three compiler-driven strategies based on the mathematical properties of the dimensions:
@@ -2464,14 +2463,14 @@ $$\text{Halo}_{\text{right}} = \frac{\text{stride} \times \text{window\_count} \
 
 ---
 
-## 5. Mathematical & Physical Analysis of Distributed Communication Costs
+## 7.5 Mathematical & Physical Analysis of Distributed Communication Costs
 
 In a distributed environment, the interconnect topology dictates the cost of communication collectives. We analyze the latency and bandwidth scaling of GShard's core primitives on a multidimensional **2D Torus** physical network topology.
 
-### 5.1 The Mathematical Derivation of All-to-All $O(\sqrt{D})$ Scaling
+### 7.5.1 The Mathematical Derivation of All-to-All $O(\sqrt{D})$ Scaling
 We prove why the communication cost of an `AllToAll` operation scales as $O(\sqrt{D})$ on a 2D physical grid of $D$ devices.
 
-#### Physical Parameters:
+#### 7.5.1.1 Physical Parameters:
 * Let $D$ be the total number of physical devices in the 2D grid torus.
 * Let each device hold a local chunk of data of size $B$ bytes to transmit.
 * The total data injected into the physical network fabric across the entire cluster is $d = D \cdot B$.
@@ -2483,7 +2482,7 @@ $$h = O(\sqrt{D})$$
 
 $$l = O(D)$$
 
-#### Bandwidth-Bound Execution Time ($t_{\text{bandwidth}}$):
+#### 7.5.1.2 Bandwidth-Bound Execution Time ($t_{\text{bandwidth}}$):
 The execution time of a network transfer is determined by the total network load (total data transmitted multiplied by the average hop distance) divided by the total available network capacity (number of physical links multiplied by the physical link bandwidth):
 
 $$t_{\text{bandwidth}} \propto \frac{\text{Total Network Load}}{\text{Total Link Capacity}} = \frac{d \cdot h}{l} = \frac{O(D \cdot B) \cdot O(\sqrt{D})}{O(D)}$$
@@ -2492,12 +2491,12 @@ Since $B$ is a constant local buffer size:
 
 $$t_{\text{bandwidth}} = O\left(\frac{D \cdot \sqrt{D}}{D}\right) = O(\sqrt{D})$$
 
-#### Latency-Bound Execution Time ($t_{\text{latency}}$):
+#### 7.5.1.3 Latency-Bound Execution Time ($t_{\text{latency}}$):
 In the latency-dominated regime (small packet sizes), execution time is bounded by the network serialization delay along the longest routing path, which is directly proportional to the physical hop distance:
 
 $$t_{\text{latency}} = O(h) = O(\sqrt{D})$$
 
-#### Empirical Verification:
+#### 7.5.1.4 Empirical Verification:
 This $O(\sqrt{D})$ scaling is highly efficient. When scaling a cluster from $16$ devices to $2048$ devices—a **128-fold increase** in physical machine count—the communication execution time of GShard's `AllToAll` collective increases by **only 9-fold** (matching $\sqrt{128} \approx 11.3$). This sub-linear scaling profile is what makes large-scale token routing physically viable.
 
 ```
@@ -2517,7 +2516,7 @@ This $O(\sqrt{D})$ scaling is highly efficient. When scaling a cluster from $16$
               16  32  64  128  256  512  1024  2048
 ```
 
-### 5.2 Scalability Matrix of Partitioned Operators
+### 7.5.2 Scalability Matrix of Partitioned Operators
 The XLA SPMD partitioner's performance characteristics for common neural network operators are summarized below:
 
 | Operator | Dimension Configuration | Sharding Dimension | Total Cluster Compute | Per-Partition Compute | Communication Primitive | Communication Scaling |
@@ -2534,11 +2533,11 @@ The XLA SPMD partitioner's performance characteristics for common neural network
 
 ---
 
-## 6. Performance, Memory, and Translation Evaluation (M4)
+## 7.6 Performance, Memory, and Translation Evaluation (M4)
 
 To evaluate the system efficacy of GShard, Lepikhin et al. conducted extensive experiments scaling models up to 600 billion and 1 trillion parameters on the Web-Scale Massively Multilingual Machine Translation (M4) corpus. The dataset spans 100 languages to and from English, containing 25 billion parallel training sentences.
 
-### 6.1 Per-Device Memory Consumption
+### 7.6.1 Per-Device Memory Consumption
 Under GShard's SPMD partitioning scheme, memory consumption on each individual device exhibits ideal scaling. Weight memory and activation memory remain **strictly constant ($O(1)$)** as the number of experts $E$ and physical devices $D$ are scaled proportionally.
 
 ```
@@ -2554,13 +2553,13 @@ Under GShard's SPMD partitioning scheme, memory consumption on each individual d
 
 However, both weight and activation memory scale linearly with the depth (number of layers $L$). When the capacity of a single accelerator's HBM is exceeded, GShard utilizes compiler-driven **rematerialization** (activation checkpointing), which recalculates activations during the backward pass rather than caching them. For the 36-layer and 60-layer models, rematerialization introduces an execution overhead of 28% and 34% total cycle time, respectively, but prevents Out-of-Memory (OOM) errors.
 
-### 6.2 Roofline Efficacy and Bottlenecks
+### 7.6.2 Roofline Efficacy and Bottlenecks
 GShard achieves high floating-point efficiency on TPUs:
 * **Dense Matrix Operations:** Standard Feed-Forward layers and attention projections achieve **$>85\%$ of peak physical hardware FLOPS** due to large, regular matrix operations that saturate TPU matrix-multiply units (MXUs).
 * **Attention Blocks:** Multi-Head Attention blocks are restricted to **$>30\%$ of peak FLOPS** due to being memory-bandwidth bound rather than compute bound.
 * **Gating Execution Bottlenecks:** The sequential and logical components of routing (such as physical `ArgMax` and prefix-sum `Cumsum` operations to invert the routing matrices) have a theoretical compute cost of $O(D)$. While this cost increases linearly with the physical expert count, it features a small constant factor, occupying **under 10% of total execution time** even at a massive scale of 2048 experts.
 
-### 6.3 Massively Multilingual Translation Performance
+### 7.6.3 Massively Multilingual Translation Performance
 The primary goal of M4 translation is to strike a balance between maximizing positive transfer for low-resource languages and mitigating the capacity bottleneck (negative task interference) for high-resource languages within a single, unified model.
 
 ```
@@ -2580,7 +2579,7 @@ Translation Quality Comparison (smoothed ΔBLEU over monolingual baselines)
 * **Capacity Bottleneck Relaxation:** In low-capacity multilingual models, high-resource languages experience degraded quality due to shared parameters being overwritten by other language pairs. Scaling the number of experts per layer from 128 to 512 relaxes this capacity bottleneck, delivering a major **+3.3 average BLEU** jump across all 100 languages.
 * **Positive Transfer for Low-Resource Languages:** Dense-deep models (like the 2.3B parameter 96-layer dense Transformer) maximize parameter sharing, leading to strong positive transfer for low-resource languages. However, the 37B parameter MoE model (with 128 experts) achieves identical low-resource transfer quality while requiring a fraction of the training resources.
 
-### 6.4 Training Efficiency: MoE vs. Dense Scaling
+### 7.6.4 Training Efficiency: MoE vs. Dense Scaling
 The table below contrasts the end-to-end training efficiency of different scaled configurations:
 
 | Model ID | Model Configuration | Physical Device Cores | Parameter Count | Steps per Second | Batch Size (Tokens) | TPU Core Years | Wall-Clock Training Time | Average BLEU |
@@ -2594,7 +2593,7 @@ The table below contrasts the end-to-end training efficiency of different scaled
 | **\*** | Dense `T(96L)` | $2048$ | $2.3\text{ Billion}$ | *Pipeline* | $4\text{ Million}$ | **235.5** | **42.0 Days** | $36.9$ |
 | **\*** | Monolingual Baselines | $100 \times 1$ | $100 \times 0.4\text{B}$ | — | — | **29.0** | — | $30.8$ |
 
-#### Key Systems Efficiency Insights:
+#### 7.6.4.1 Key Systems Efficiency Insights:
 * **The Sparse Scaling Advantage:** The 600-billion-parameter MoE model (1) trained to convergence in **only 4.0 days** utilizing 2048 TPU cores (22.4 core-years), achieving the highest translation score of 44.3 BLEU.
 * **Dense Scaling Inefficiency:** In comparison, the dense 96-layer baseline `T(96L)` required **42.0 days** to converge on the same cluster (consuming 235.5 core-years)—a **10-fold increase in training cost**—while delivering a translation quality of only 36.9 BLEU, lagging behind the MoE model by **7.4 BLEU points**.
 * **Multilingual Consolidation:** Training all 100 bilingual dense baseline models independently consumed a total of 29 TPU core-years. GShard's unified 600B MoE consolidated all 100 language pairs into a single, high-performing model at a lower aggregate compute budget (22.4 core-years), demonstrating the ultimate economic viability of massive sparse systems compilation.
@@ -2603,7 +2602,7 @@ The table below contrasts the end-to-end training efficiency of different scaled
 ---
 
 
-# Section 8: Overcoming Systems Waste: Dropless Sparse Kernels & MegaBlocks {#section-8-overcoming-systems-waste-dropless-sparse-kernels-megablocks}
+# Section 8: Overcoming Systems Waste: Dropless Sparse Kernels & MegaBlocks
 
 Sparsely-gated Mixture-of-Experts (MoE) architectures offer a powerful mechanism to scale the capacity of Deep Learning models without a proportional increase in computational cost. However, executing these models efficiently on modern hardware accelerators (such as GPUs and TPUs) is a major systems challenge. Because deep learning frameworks are highly optimized for dense, regular computation, the dynamic routing and load imbalance inherent in MoEs introduce severe performance bottlenecks.
 
@@ -2611,7 +2610,7 @@ To address these limitations, [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/
 
 ---
 
-## 1. The Capacity-Padding Dilemma in Traditional MoE Frameworks
+## 8.1 The Capacity-Padding Dilemma in Traditional MoE Frameworks
 
 Traditional MoE frameworks—such as [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668) and [Fedus et al. 2021 (Switch Transformers)](https://arxiv.org/abs/2101.03961)—rely on **Batched Matrix Multiplication (Batch GEMM)** to compute all experts within a layer in parallel. While Batch GEMM is highly optimized on accelerators, it places rigid structural constraints on the underlying computations:
 1. **Identical Expert Shapes**: All expert weight matrices must share the exact same dimensions.
@@ -2619,14 +2618,14 @@ Traditional MoE frameworks—such as [Lepikhin et al. 2020 (GShard)](https://arx
 
 The second constraint is highly problematic because learned routing algorithms (e.g., top-$k$ gating) provide no guarantees of a load-balanced assignment of tokens to experts. The number of tokens routed to each expert varies dynamically and unpredictably across training steps and inputs.
 
-### 1.1 The Expert Capacity Equation
+### 8.1.1 The Expert Capacity Equation
 To map this dynamic load to the static shapes required by Batch GEMM, traditional frameworks enforce a fixed **Expert Capacity** ($C$). For a micro-batch containing $T$ tokens, routed to $E$ experts with top-$k$ gating, the expert capacity $C$ is computed as:
 
 $$C = \left\lceil \frac{T \cdot k}{E} \cdot f \right\rceil$$
 
 where $f \ge 1$ is the **Capacity Factor** hyperparameter. The capacity factor represents a multiplier on the expected number of tokens that would be assigned to each expert under a perfectly uniform distribution.
 
-### 1.2 The Procrustean Trade-off: Token Dropping vs. Capacity Padding
+### 8.1.2 The Procrustean Trade-off: Token Dropping vs. Capacity Padding
 This formulation forces a rigid trade-off between model quality and hardware efficiency:
 
 ```
@@ -2647,7 +2646,7 @@ This formulation forces a rigid trade-off between model quality and hardware eff
 *   **Token Dropping (Token Count > $C$)**: If the router assigns more than $C$ tokens to a particular expert, the excess tokens are **dropped**. They bypass the expert layer entirely via a residual connection. This severely degrades representation learning, as the model cannot process the dropped tokens' semantic context at that layer.
 *   **Capacity Padding (Token Count < $C$)**: If an expert receives fewer than $C$ tokens, its input buffer is **padded with zeros** to fill the remaining capacity. The GPU performs full forward and backward matrix multiplications on these dummy tokens, wasting computational resources (FLOPs) and bloating activation memory.
 
-### 1.3 Quantifying the Trade-off and Memory Overhead
+### 8.1.3 Quantifying the Trade-off and Memory Overhead
 As analyzed by [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/abs/2211.15841), load-balancing auxiliary losses do not prevent severe routing imbalances. Minimizing token dropping requires scaling the capacity factor ($f$), which incurs significant overheads:
 *   **Model Quality Impact**: In experiments on *The Pile* dataset, a top-1 MoE with a capacity factor of 1 achieved a validation loss reduction of 0.15. However, avoiding token dropping entirely (using dynamic capacity) achieved a reduction of 0.26—a **1.73× larger gain** that surpassed a standard dense Transformer-Medium model.
 *   **Computational Waste**: To completely avoid dropping tokens, the MoE layer FLOPs increased by over **2×** due to zero-padding. In extreme cases, models required capacity factors as high as **11** to eliminate token dropping, wasting the vast majority of computed FLOPs.
@@ -2663,11 +2662,11 @@ As analyzed by [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/abs/2211.15841)
 
 ---
 
-## 2. Reformulating MoE as Block-Sparse Computation
+## 8.2 Reformulating MoE as Block-Sparse Computation
 
 To overcome the capacity-padding dilemma, [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/abs/2211.15841) reformulate MoE layer execution as **Block-Sparse Matrix Multiplication**. Under this view, the dynamic routing in MoE layers is treated as a form of **dynamic, structured, activation sparsity**.
 
-### 2.1 Structural Comparison of Expert Execution Paradigms
+### 8.2.1 Structural Comparison of Expert Execution Paradigms
 
 ```
 (A) Batched GEMM (Traditional)     (B) Block-Diagonal GEMM (Dense)   (C) Block-Sparse GEMM (MegaBlocks)
@@ -2694,7 +2693,7 @@ $$M_e = \left\lceil \frac{T_e}{b} \right\rceil \cdot b$$
 
 The total number of rows across all local experts is $M = \sum_{e=0}^{E-1} M_e$. The permuted token activation matrix is $X_{\text{perm}} \in \mathbb{R}^{M \times H}$. The expert weights are packed into a single large dense weight matrix $W_1 \in \mathbb{R}^{H \times E \cdot F}$ (where $F$ is the FFN hidden dimension). The output of the first linear layer is a block-sparse matrix $Y \in \mathbb{R}^{M \times E \cdot F}$ with block-diagonal structure.
 
-### 2.2 Mathematical Formulation of the dMoE Layer
+### 8.2.2 Mathematical Formulation of the dMoE Layer
 
 The forward and backward passes of a two-layer Multi-Layer Perceptron (MLP) MoE layer in MegaBlocks are formulated strictly through sparse-dense matrix primitives. We denote the block diagonal sparse topology as $\mathcal{T}$.
 
@@ -2724,7 +2723,7 @@ The forward and backward passes of a two-layer Multi-Layer Perceptron (MLP) MoE 
                                                         Data Gradient: dX    Weight Gradient: dW1
 ```
 
-#### 2.2.1 The Forward Pass
+#### 8.2.2.1 The Forward Pass
 1.  **First Linear Layer (SDD)**: The permuted token matrix $X_{\text{perm}} \in \mathbb{R}^{M \times H}$ is multiplied by the dense weight matrix $W_1 \in \mathbb{R}^{H \times E \cdot F}$. Because only the tokens corresponding to expert $e$ should be multiplied by expert $e$'s weights, the output $Y$ is block-sparse with topology $\mathcal{T}$. This is computed via Sampled Dense-Dense Matrix Multiplication (SDD):
 
     $$Y = \text{sdd}(X_{\text{perm}}, W_1, \mathcal{T})$$
@@ -2737,7 +2736,7 @@ The forward and backward passes of a two-layer Multi-Layer Perceptron (MLP) MoE 
 
     $$O = \text{dsd}(Z, W_2)$$
 
-#### 2.2.2 The Backward Pass Derivation
+#### 8.2.2.2 The Backward Pass Derivation
 Given the incoming dense gradient of the loss with respect to the output, $\nabla_O \mathcal{L} \in \mathbb{R}^{M \times H}$, the gradients for all parameters and activations are derived below:
 
 1.  **Gradient with respect to second-layer weights ($W_2$)**:
@@ -2783,7 +2782,7 @@ Given the incoming dense gradient of the loss with respect to the output, $\nabl
     
     $$\nabla_{W_1} \mathcal{L} = \text{ddts}(X_{\text{perm}}, \nabla_Y \mathcal{L})$$
 
-### 2.3 Sparse Primitives Reference Matrix
+### 8.2.3 Sparse Primitives Reference Matrix
 
 The table below summarizes all sparse-dense operations required for the dMoE layer forward and backward passes, mapping their mathematical expressions to MegaBlocks sparse operations:
 
@@ -2798,11 +2797,11 @@ The table below summarizes all sparse-dense operations required for the dMoE lay
 
 ---
 
-## 3. MegaBlocks High-Performance GPU Kernels
+## 8.3 MegaBlocks High-Performance GPU Kernels
 
 Implementing dynamic block-sparse execution requires specialized high-performance GPU kernels. Standard sparse libraries are highly unsuitable for the dynamic workloads of MoE training.
 
-### 3.1 Limitations of Existing Sparse Libraries
+### 8.3.1 Limitations of Existing Sparse Libraries
 *   **NVIDIA cuSPARSE**:
     *   Designed primarily for inference or static sparse patterns; cuSPARSE provides a DSD kernel using the blocked-ELL format, but it **does not support transposition** of the sparse input operand as of CUDA 11.8.
     *   It provides no SDD primitive for blocked-ELL matrices, which is required for the first linear layer forward pass and the second-layer activation gradient in the backward pass.
@@ -2813,7 +2812,7 @@ Implementing dynamic block-sparse execution requires specialized high-performanc
 
 To address these limitations, [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/abs/2211.15841) developed custom block-sparse kernels by extending the **NVIDIA CUTLASS** template library. These kernels support high-performance mixed-precision execution (FP16/BF16 inputs with FP32 accumulation) and dynamic topologies.
 
-### 3.2 Block Size Selection ($128 \times 128$)
+### 8.3.2 Block Size Selection ($128 \times 128$)
 Modern GPUs (such as the NVIDIA A100 Tensor Core GPU) exploit shared memory tiling and Tensor Core warp-level matrix multiplications. To maximize arithmetic intensity and maintain high hardware occupancy, the sparse block size must be large enough to keep Tensor Core units busy.
 
 ```
@@ -2837,7 +2836,7 @@ As shown in CUTLASS tile size benchmarks on the A100 SXM4 GPU, **$128 \times 128
 
 Because MoE expert dimensions are large (FFN hidden size $F$ ranges from $1024$ to $8192$ and token counts per expert are typically thousands), choosing a block size of **$128 \times 128$** perfectly aligns with modern GPU execution hierarchies without introducing significant padding waste at block boundaries.
 
-### 3.3 Hybrid Blocked-CSR-COO (BCSR-BCOO) Format
+### 8.3.3 Hybrid Blocked-CSR-COO (BCSR-BCOO) Format
 The standard format for row-oriented sparse matrices is **Blocked Compressed Sparse Row (BCSR)**. While BCSR is highly efficient for row-wise iteration (required in DSD and DSDT operations), it introduces massive overhead for parallel **SDD** operations.
 
 In an SDD kernel, each threadblock is assigned to compute a specific non-zero block of the sparse output matrix. To load the correct tiles of the dense input matrices $X_{\text{perm}}$ and $W_1$, the threadblock must resolve the absolute **row ($i$) and column ($j$) indices** of its assigned block. 
@@ -2860,7 +2859,7 @@ Sparse Matrix Topology (3x3 blocks):
 
 By explicitly materializing the row indices for each block, the SDD threadblocks perform a simple **$O(1)$ direct array lookup** to resolve their coordinates, eliminating search overhead. The memory footprint of this additional metadata is negligible: it requires storing only a single integer per $128 \times 128 = 16,384$ values (an overhead of less than $0.006\%$).
 
-### 3.4 Block-Sparse Transposition with Transpose Indices
+### 8.3.4 Block-Sparse Transposition with Transpose Indices
 Computing backward pass gradients requires transposing the block-sparse matrices (e.g., $Z^T$ in DSTD). In standard sparse computation, transposing a sparse matrix requires copying all the non-zero values in memory to reorganize them into a transposed layout, which is highly expensive.
 
 MegaBlocks avoids copying or transposing the actual data values. Instead, it constructs a secondary index of **Transpose Indices**:
@@ -2880,11 +2879,11 @@ Because the block size ($128 \times 128$) is large, the cost of this indirect me
 
 ---
 
-## 4. The ParallelLinear Component and End-to-End System Design
+## 8.4 The ParallelLinear Component and End-to-End System Design
 
 MegaBlocks integrates these block-sparse kernels into a highly optimized, end-to-end Pytorch module called `ParallelLinear`. This component replaces the standard dense model-parallel linear layers (e.g., `ColumnParallelLinear` and `RowParallelLinear` in Megatron-LM) inside the MoE MLP layers.
 
-### 4.1 End-to-End Execution Flow within `ParallelLinear`
+### 8.4.1 End-to-End Execution Flow within `ParallelLinear`
 
 ```
   Input Activations: X [T, H]
@@ -2925,14 +2924,14 @@ MegaBlocks integrates these block-sparse kernels into a highly optimized, end-to
                              Output Tensor: O * Weights [T, H]
 ```
 
-### 4.2 Key Processing Stages
+### 8.4.2 Key Processing Stages
 1.  **Learned Routing**: The input activations $X \in \mathbb{R}^{T \times H}$ are projected by the router to calculate routing logits. The router applies a softmax function and greedily selects the top-$k$ experts for each token.
 2.  **Permutation and Padding (`padded_gather`)**: The input tokens are grouped by their expert assignment. This operation is implemented in custom CUDA kernels that group the tokens and pad each expert's batch size $T_e$ to the nearest multiple of $128$ in a single, fused pass.
 3.  **Topology Creation (`make_topology`)**: The system constructs the sparse BCSR-BCOO metadata and the Transpose Indices array. Because the metadata is identical for all block-sparse multiplications within a single FFN pass, its creation cost is amortized across all 6 forward and backward sparse matrix multiplications in the layer.
 4.  **Block-Sparse Execution**: The FFN layers are executed in parallel using CUTLASS-based `sdd` and `dsd` operations (and their corresponding backward gradients: `dstd`, `dsdt`, `ddts`).
 5.  **Un-permutation and Gating (`padded_scatter`)**: The results are un-permuted back to their original sequence ordering and scaled by the router's probabilities.
 
-### 4.3 Distributed Execution Context
+### 8.4.3 Distributed Execution Context
 In large-scale training, `ParallelLinear` supports both **Data Parallelism** and **Expert Model Parallelism** (where each GPU holds a subset of the experts):
 *   Tokens are globally routed across devices using high-performance `all-to-all` collective communication.
 *   Once collected on their designated GPU, the local tokens are computed in parallel using `ParallelLinear` block-sparse execution.
@@ -2940,11 +2939,11 @@ In large-scale training, `ParallelLinear` supports both **Data Parallelism** and
 
 ---
 
-## 5. Empirical Evaluation: Throughput Benchmarks and Speedups
+## 8.5 Empirical Evaluation: Throughput Benchmarks and Speedups
 
 [Gale et al. 2022 (MegaBlocks)](https://arxiv.org/abs/2211.15841) evaluated the system on an 8-GPU NVIDIA A100 SXM4 80GB system, using mixed-precision training. The MoE configurations scaled from XS (839M parameters) to Medium (13.04B parameters) with 64 experts and top-1 routing.
 
-### 5.1 End-to-End Training Speedups
+### 8.5.1 End-to-End Training Speedups
 Compared to state-of-the-art baselines, MegaBlocks delivers substantial training speedups:
 
 ```
@@ -2967,7 +2966,7 @@ Compared to state-of-the-art baselines, MegaBlocks delivers substantial training
 *   **Speedup Over Tutel (Fixed Capacity)**: Even when comparing against the absolute best-tuned fixed capacity factor for Tutel (searched along the Pareto frontier), MegaBlocks still reduces the training time to reach a target validation loss by **1.38×, 1.37×, and 1.18×**, while completely eliminating the cost and complexity of hyperparameter tuning.
 *   **Speedup Over Megatron-LM (Dense baseline)**: Compared to highly optimized dense Transformers trained with Megatron-LM, dMoEs trained with MegaBlocks achieve **1.8× to 2.4× end-to-end training speedups** for the same validation loss.
 
-### 5.2 Kernel Throughput Benchmarks
+### 8.5.2 Kernel Throughput Benchmarks
 To evaluate the absolute efficiency of the block-sparse kernels, MegaBlocks' sparse matrix products were benchmarked against highly optimized **cuBLAS Batched GEMM** on the exact problem configurations used during training:
 
 ```
@@ -2998,25 +2997,23 @@ On average, MegaBlocks' block-sparse kernels realize **98.6% of the throughput o
 ---
 
 
-# Section 9: Mixtral, DeepSeek-V2, and Modern Production MoE LLMs {#section-9-mixtral-deepseek-v2-and-modern-production-moe-llms}
+# Section 9: Production MoE LLMs, Synthesis & Structural Comparison
 
-The Mixture of Experts (MoE) architecture has evolved from a theoretical framework for scaling model capacity to the dominant architectural paradigm for state-of-the-art production Large Language Models (LLMs). Early MoE research focused on solving training instability and demonstrating basic scaling laws on synthetic or translation tasks. In contrast, modern modern production MoEs—such as **Mixtral 8x7B** ([Jiang et al. 2024](https://arxiv.org/abs/2401.04088)) and **DeepSeek-V2** ([DeepSeek-AI 2024](https://arxiv.org/abs/2405.04434))—have successfully optimized sparse scaling to deliver superior compute efficiency, drastically reduced serving overheads, and state-of-the-art general capabilities.
-
-This section provides a rigorous architectural, mathematical, and engineering dissection of modern production MoE LLMs. We analyze the design choices of Mixtral 8x7B, derive the mathematical foundations of DeepSeek-V2's Multi-Head Latent Attention (MLA) and DeepSeekMoE architecture, map out production parameter scaling laws, integrate downstream transfer learning and fine-tuning dynamics from ST-MoE ([Zoph et al. 2022](https://arxiv.org/abs/2202.08906)), and analyze real-world compute, memory, and communication tradeoffs in modern production environments.
+The Mixture of Experts (MoE) architecture has evolved from a theoretical framework for scaling model capacity to the dominant architectural paradigm for state-of-the-art production Large Language Models (LLMs). This combined section first provides a rigorous architectural, mathematical, and engineering dissection of two landmark production MoE systems—**Mixtral 8x7B** ([Jiang et al. 2024](https://arxiv.org/abs/2401.04088)) and **DeepSeek-V2** ([DeepSeek-AI 2024](https://arxiv.org/abs/2405.04434))—covering MLA, DeepSeekMoE, transfer-learning dynamics from ST-MoE, and real-world compute/memory tradeoffs. It then synthesizes all ten landmark MoE architectures into a unified, mathematically rigorous comparative analysis spanning routing evolution, system parallelism, and actionable design guidance.
 
 ---
 
-## 1. Mixtral 8x7B: Scaling Sparsity with Open Weights
+## 9.1 Mixtral 8x7B: Scaling Sparsity with Open Weights
 
 Mixtral 8x7B, introduced by Mistral AI in early 2024, represented a major milestone as the first sparsely gated MoE to achieve state-of-the-art performance among open-weights models, outperforming or matching much larger dense models like LLaMA 2 70B and GPT-3.5 across diverse benchmarks.
 
-### 1.1 Structural Baseline: Mistral 7B to Mixtral 8x7B
+### 9.1.1 Structural Baseline: Mistral 7B to Mixtral 8x7B
 Mixtral is built upon the structural foundations of the Mistral 7B architecture ([Jiang et al. 2024](https://arxiv.org/abs/2401.04088)), scaled sparsely:
 1.  **Self-Attention:** Retains Grouped-Query Attention (GQA) with 32 query heads ($n_{\text{heads}} = 32$) and 8 key-value heads ($n_{\text{kv\_heads}} = 8$), reducing the Key-Value (KV) cache footprint during inference. The head dimension is $d_h = 128$.
 2.  **Layer Configuration:** 32 Transformer layers ($n_{\text{layers}} = 32$) with a hidden dimension of $d_{\text{model}} = 4096$.
 3.  **MoE Integration:** Replaces the single dense Feed-Forward Network (FFN) in **every** layer with a Sparsely-Gated MoE layer consisting of $E=8$ experts. This contrasts with earlier architectures like GShard ([Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668)), which only substituted every other FFN layer.
 
-### 1.2 Mathematical Gating and Expert Formulation
+### 9.1.2 Mathematical Gating and Expert Formulation
 At each layer, for each token $x \in \mathbb{R}^{d_{\text{model}}}$, the router network calculates a sparse routing probability distribution over the 8 experts:
 $$G(x) = \text{Softmax}\left(\text{TopK}(x \cdot W_g)\right)$$
 Where $W_g \in \mathbb{R}^{d_{\text{model}} \times E}$ represents the gating weights. In Mixtral, $K=2$ experts are selected per token (Top-2 routing). Let $E_i(x)$ represent the output of the $i$-th expert. The combined layer output $y$ is computed as:
@@ -3027,29 +3024,29 @@ Each expert $E_i$ is parameterized as a standard **SwiGLU** feed-forward block:
 $$E_i(x) = \left( \text{Swish}(x \cdot W_{\text{gate}, i}) \odot (x \cdot W_{\text{up}, i}) \right) \cdot W_{\text{down}, i}$$
 Where $W_{\text{gate}, i}, W_{\text{up}, i} \in \mathbb{R}^{d_{\text{model}} \times d_{\text{ff}}}$ and $W_{\text{down}, i} \in \mathbb{R}^{d_{\text{ff}} \times d_{\text{model}}}$. In Mixtral 8x7B, the intermediate expert hidden dimension $d_{\text{ff}}$ is set to $14336$.
 
-### 1.3 Active vs. Total Parameter Analysis
+### 9.1.3 Active vs. Total Parameter Analysis
 The structural parameters of Mixtral 8x7B are detailed in the calculation below:
 
-#### 1.3.1 Parameters per SwiGLU Expert ($P_{\text{expert}}$)
+#### 9.1.3.1 Parameters per SwiGLU Expert ($P_{\text{expert}}$)
 Each SwiGLU expert contains three weight matrices:
 $$P_{\text{expert}} = 3 \cdot d_{\text{model}} \cdot d_{\text{ff}} = 3 \cdot 4096 \cdot 14336 = 176,160,768 \text{ parameters } (\approx 176\text{M})$$
 
-#### 1.3.2 Total Parameters in MoE FFN Layer ($P_{\text{layer\_FFN}}$)
+#### 9.1.3.2 Total Parameters in MoE FFN Layer ($P_{\text{layer\_FFN}}$)
 With $E=8$ experts and a negligible router $W_g$:
 $$P_{\text{layer\_FFN}} = E \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 8 \cdot 176,160,768 + 4096 \cdot 8 = 1,409,318,912 \text{ parameters } (\approx 1.41\text{B})$$
 
-#### 1.3.3 Active Parameters in MoE FFN Layer per Token ($P_{\text{layer\_FFN\_active}}$)
+#### 9.1.3.3 Active Parameters in MoE FFN Layer per Token ($P_{\text{layer\_FFN\_active}}$)
 Since only $K=2$ experts are activated:
 $$P_{\text{layer\_FFN\_active}} = K \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 2 \cdot 176,160,768 + 32,768 = 352,354,304 \text{ parameters } (\approx 352\text{M})$$
 
-#### 1.3.4 Overall Model Scaling Breakdown
+#### 9.1.3.4 Overall Model Scaling Breakdown
 Adding attention weights ($41.94\text{M}$ per layer) and embedding/vocab layers ($32000 \times 4096 \times 2 \approx 262\text{M}$), the overall parameter count is formulated as:
 *   **Total Sparse Parameters ($P_{\text{total}}$):** $\approx 46.7 \text{ Billion}$ parameters (often rounded to 47B).
 *   **Active Parameters per Token ($P_{\text{active}}$):** $\approx 12.9 \text{ Billion}$ parameters (often rounded to 13B).
 
 This parameter scaling allows Mixtral to achieve the performance of a 47B parameter model while executing only 13B parameters of active compute per token, offering a $3.6\times$ reduction in FLOPs relative to a dense model of equivalent capacity.
 
-### 1.4 Gating Dynamics and Syntactic Locality
+### 9.1.4 Gating Dynamics and Syntactic Locality
 A key pretraining insight from [Jiang et al. 2024](https://arxiv.org/abs/2401.04088) is that, contrary to early MoE hypotheses, experts do not specialize strictly into semantic domains (e.g., mathematics vs. philosophy). By tracing token routing distributions across different subsets of *The Pile* validation dataset:
 1.  **Uniform Semantic Distribution:** The routing proportion for domains like ArXiv, Github, Gutenberg, and Wikipedia remains virtually identical across experts (centered around the uniform $1/E = 12.5\%$ baseline), except for DM Mathematics, which exhibits a marginal shift.
 2.  **Syntactic and Part-of-Speech Specialization:** The gating network specializes primarily in syntactic patterns. Words like `"self"` in Python and `"Question"` in English are consistently routed to the same expert.
@@ -3061,7 +3058,7 @@ This temporal locality has profound engineering implications: it can cause compu
 
 ---
 
-## 2. DeepSeek-V2: Economical pretraining and Ultra-Efficient Inference
+## 9.2 DeepSeek-V2: Economical pretraining and Ultra-Efficient Inference
 
 DeepSeek-V2, introduced in mid-2024, represents a paradigm shift in modern production-scale MoE LLMs. Designed to support a massive 128K context length, it scales to **236B total parameters** while activating only **21B parameters per token**. To achieve both economical training and highly efficient serving, it redesigns the two core pillars of the Transformer block: the Attention module via **Multi-Head Latent Attention (MLA)** and the FFN via **DeepSeekMoE**.
 
@@ -3079,7 +3076,7 @@ DeepSeek-V2, introduced in mid-2024, represents a paradigm shift in modern produ
 └─────────────────────────────────┘      └─────────────────────────────────┘
 ```
 
-### 2.1 Multi-Head Latent Attention (MLA)
+### 9.2.1 Multi-Head Latent Attention (MLA)
 The principal bottleneck in serving long-context LLMs is the Key-Value (KV) Cache, which grows linearly with batch size and sequence length. Standard Multi-Head Attention (MHA) caches $2 \cdot n_h \cdot d_h \cdot l$ elements per token. Grouped-Query Attention (GQA) and Multi-Query Attention (MQA) reduce this footprint by sharing keys and values across query heads, but this compromises representation capacity and downstream perplexity.
 
 To resolve this tradeoff, DeepSeek-V2 introduces Multi-Head Latent Attention (MLA), which compresses keys and values into a low-rank latent vector during inference while preserving high-capacity multi-head dynamics.
@@ -3096,7 +3093,7 @@ Multi-Head Latent Attention (MLA):
 [Input h_t] ───────────────────────> [Shared Key W_KR] ────> [RoPE Key k_t^R (Cache)] ──┴──> Concatenated Keys/Queries
 ```
 
-#### 2.1.1 Low-Rank Key-Value Joint Compression
+#### 9.2.1.1 Low-Rank Key-Value Joint Compression
 MLA dynamically projects the hidden state $h_t \in \mathbb{R}^d$ into a low-rank latent space:
 $$\mathbf{c}_t^{KV} = W^{DKV} \mathbf{h}_t$$
 $$\mathbf{k}_t^C = W^{UK} \mathbf{c}_t^{KV}$$
@@ -3112,7 +3109,7 @@ $$\mathbf{c}_t^Q = W^{DQ} \mathbf{h}_t$$
 $$\mathbf{q}_t^C = W^{UQ} \mathbf{c}_t^Q$$
 Where $\mathbf{c}_t^Q \in \mathbb{R}^{d'_c}$ represents the query latent vector, $W^{DQ} \in \mathbb{R}^{d'_c \times d}$ is the down-projection matrix, and $W^{UQ} \in \mathbb{R}^{n_h d_h \times d'_c}$ is the up-projection matrix.
 
-#### 2.1.2 Decoupled Rotary Position Embedding (RoPE)
+#### 9.2.1.2 Decoupled Rotary Position Embedding (RoPE)
 A critical mathematical hurdle for MLA is that Rotary Position Embeddings (RoPE) are position-sensitive and depend on token-specific rotation matrices $R_t$. If we apply RoPE directly to $\mathbf{k}_t^C$:
 $$\tilde{\mathbf{k}}_t^C = R_t \cdot \mathbf{k}_t^C = R_t \cdot W^{UK} \mathbf{c}_t^{KV}$$
 Because matrix multiplication is non-commutative ($R_t \cdot W^{UK} \neq W^{UK} \cdot R_t$), the up-projection $W^{UK}$ cannot be factored out and absorbed into the query projection. This would force the system to decompress and cache the full $n_h d_h$ key matrices for all historical prefix tokens at every generation step, neutralizing the KV cache memory savings.
@@ -3128,20 +3125,20 @@ Where:
     $$\mathbf{k}_t^R = \text{RoPE}(W^{KR} \mathbf{h}_t)$$
 *   $[ \cdot ; \cdot ]$ represents tensor concatenation along the head dimension, yielding a total head dimension of $d_h + d_h^R$.
 
-#### 2.1.3 Full MLA Mathematical Formulation
+#### 9.2.1.3 Full MLA Mathematical Formulation
 Let $n_h$ be the number of heads. For each head $i \in \{1, \dots, n_h\}$, the attention computation is formulated as:
 $$\mathbf{o}_{t, i} = \sum_{j=1}^t \text{Softmax}_j \left( \frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_h + d_h^R}} \right) \mathbf{v}_{j, i}^C$$
 $$\mathbf{u}_t = W^O [\mathbf{o}_{t, 1}; \mathbf{o}_{t, 2}; \dots; \mathbf{o}_{t, n_h}]$$
 Where $W^O \in \mathbb{R}^{d \times n_h d_h}$ is the output projection.
 
-#### 2.1.4 Linear Projection Absorption during Inference
+#### 9.2.1.4 Linear Projection Absorption during Inference
 During generation, we do not need to materialize the keys and values. The content inner product can be computed directly in the compressed latent space:
 $$(\mathbf{q}_{t, i}^C)^T \mathbf{k}_{j, i}^C = (\mathbf{c}_t^Q)^T (W^{UQ}_i)^T W^{UK}_i \mathbf{c}_j^{KV} = (\mathbf{c}_t^Q)^T M_i \mathbf{c}_j^{KV}$$
 Where $M_i = (W^{UQ}_i)^T W^{UK}_i \in \mathbb{R}^{d'_c \times d_c}$ is pre-computed and cached. Similarly, the up-projection for value matrices can be absorbed into the output projection:
 $$W^O [\mathbf{o}_{t, 1}; \dots; \mathbf{o}_{t, n_h}] = \sum_{i=1}^{n_h} W^O_i \left( \text{AttnWeight}_{t, j, i} \cdot W^{UV}_i \mathbf{c}_j^{KV} \right) = \sum_{i=1}^{n_h} \text{AttnWeight}_{t, j, i} \cdot U_i \mathbf{c}_j^{KV}$$
 Where $U_i = W^O_i W^{UV}_i \in \mathbb{R}^{d \times d_c}$ is pre-computed.
 
-#### 2.1.5 KV Cache Storage Metrics
+#### 9.2.1.5 KV Cache Storage Metrics
 By decoupling RoPE, DeepSeek-V2 only needs to cache the latent vector $\mathbf{c}_t^{KV} \in \mathbb{R}^{d_c}$ and the shared RoPE key $\mathbf{k}_t^R \in \mathbb{R}^{d_h^R}$ per token at each layer.
 *   **Elements cached per token:** $d_c + d_h^R = 512 + 64 = 576$ elements.
 *   **Comparison to Standard MHA:** A dense model with identical configuration ($n_h = 128, d_h = 128$) would require caching $2 \cdot n_h \cdot d_h = 2 \cdot 128 \cdot 128 = 32,768$ elements. MLA achieves a **$98.24\%$ reduction** in KV cache memory footprint.
@@ -3153,7 +3150,7 @@ In production serving, DeepSeek-V2 applies low-bit **6-bit KV Cache Quantization
 
 ---
 
-### 2.2 DeepSeekMoE: Finer-Grained Segmentation and Shared Isolations
+### 9.2.2 DeepSeekMoE: Finer-Grained Segmentation and Shared Isolations
 Standard GShard MoE architectures shard the model's FFN capacity into $E$ large, homogeneous experts. However, this causes broad overlap and knowledge redundancy across experts, limiting the efficiency of parameter scaling. DeepSeek-V2 implements the **DeepSeekMoE** architecture ([Dai et al. 2024](https://arxiv.org/abs/2401.06066)), which introduces two architectural innovations:
 1.  **Fine-Grained Expert Segmentation:** Divides the FFN capacity into many small experts. Rather than routing to $K$ large experts, it routes tokens to a larger number of tiny experts to achieve extreme specialization.
 2.  **Shared Expert Isolation:** Isolates a set of experts that are always active (shared) across all tokens. This isolates common, general-purpose representations, preventing redundant knowledge from polluting specialized routed experts.
@@ -3178,7 +3175,7 @@ DeepSeekMoE:
                                   [Layer Output]
 ```
 
-#### 2.2.1 Mathematical Formulation of DeepSeekMoE
+#### 9.2.2.1 Mathematical Formulation of DeepSeekMoE
 Let $\mathbf{u}_t \in \mathbb{R}^d$ be the input to the MoE layer. The layer output $\mathbf{h}'_t$ is computed as the sum of shared and routed expert computations:
 $$\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j, t} \text{FFN}_j^{(r)}(\mathbf{u}_t)$$
 Where:
@@ -3190,7 +3187,7 @@ Where:
     $$s_{j, t} = \text{Softmax}_j \left( \mathbf{u}_t^T \mathbf{e}_j \right)$$
     Where $\mathbf{e}_j$ represents the centroid representation of the $j$-th routed expert.
 
-#### 2.2.2 Architectural Dimensions of DeepSeek-V2
+#### 9.2.2.2 Architectural Dimensions of DeepSeek-V2
 In DeepSeek-V2's MoE layers:
 *   **Shared Experts:** $N_s = 2$.
 *   **Routed Experts:** $N_r = 160$.
@@ -3202,7 +3199,7 @@ In DeepSeek-V2's MoE layers:
 
 ---
 
-### 2.3 Device-Limited Routing
+### 9.2.3 Device-Limited Routing
 To mitigate the communication latency of Expert Parallelism across large clusters, DeepSeek-V2 constrains the number of physical devices a single token's representations can be dispatched to:
 1.  **Device-Group Partitioning:** The $N_r = 160$ experts are partitioned uniformly across $D$ physical devices (e.g., $D=8$ devices, with 20 experts per device).
 2.  **Top-$M$ Device Selection:** For each token, the router first evaluates the aggregate expert affinity per device and selects the **Top-$M$ devices** (where $M \ll D$).
@@ -3212,35 +3209,35 @@ In DeepSeek-V2, setting $M = 3$ restricts network communication to at most 3 des
 
 ---
 
-### 2.4 Modern Load-Balancing Optimization
+### 9.2.4 Modern Load-Balancing Optimization
 DeepSeek-V2 implements three distinct auxiliary losses to ensure balance across experts, devices, and communication networks:
 $$\mathcal{L}_{\text{balance\_total}} = \alpha_1 \mathcal{L}_{\text{ExpBal}} + \alpha_2 \mathcal{L}_{\text{DevBal}} + \alpha_3 \mathcal{L}_{\text{CommBal}}$$
 
-#### 2.4.1 Expert-Level Balance Loss ($L_{\text{ExpBal}}$)
+#### 9.2.4.1 Expert-Level Balance Loss ($L_{\text{ExpBal}}$)
 To prevent expert routing collapse ([Switch Transformers](https://arxiv.org/abs/2101.03961)), this loss encourages uniform token distribution across all $N_r$ routed experts:
 $$\mathcal{L}_{\text{ExpBal}} = \sum_{i=1}^{N_r} f_i P_i$$
 $$f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ selects Expert } i)$$
 $$P_i = \frac{1}{T} \sum_{t=1}^T s_{i, t}$$
 Where $T$ is the number of tokens in the batch, and $\alpha_1 = 0.003$.
 
-#### 2.4.2 Device-Level Balance Loss ($L_{\text{DevBal}}$)
+#### 9.2.4.2 Device-Level Balance Loss ($L_{\text{DevBal}}$)
 Under Expert Parallelism, experts are partitioned into $D$ groups $\{ \mathcal{E}_1, \dots, \mathcal{E}_D \}$ deployed on $D$ physical devices. To ensure balanced computational load across accelerators:
 $$\mathcal{L}_{\text{DevBal}} = \sum_{i=1}^D f'_i P'_i$$
 $$f'_i = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j \quad \text{and} \quad P'_i = \sum_{j \in \mathcal{E}_i} P_j$$
 Where $\alpha_2 = 0.05$.
 
-#### 2.4.3 Communication Balance Loss ($L_{\text{CommBal}}$)
+#### 9.2.4.3 Communication Balance Loss ($L_{\text{CommBal}}$)
 Even if computation is balanced, communication bottlenecks can occur if a single device receives a disproportionate number of tokens. To balance network traffic:
 $$\mathcal{L}_{\text{CommBal}} = \sum_{i=1}^D f''_i P''_i$$
 $$f''_i = \frac{D}{M T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ is sent to Device } i) \quad \text{and} \quad P''_i = \sum_{j \in \mathcal{E}_i} P_j$$
 Where $\alpha_3 = 0.02$.
 
-#### 2.4.4 Token-Dropping Strategy
+#### 9.2.4.4 Token-Dropping Strategy
 DeepSeek-V2 supplements balance losses with a strict **Device-Level Token-Dropping Strategy** during training. It sets the device capacity factor to $1.0$. Tokens with the lowest affinity scores are dropped to prevent buffer overflows, except for a protected $10\%$ subset of sequences to ensure consistency between training and inference.
 
 ---
 
-### 2.5 Group Relative Policy Optimization (GRPO)
+### 9.2.5 Group Relative Policy Optimization (GRPO)
 For human preference alignment, DeepSeek-V2 adopts Group Relative Policy Optimization (GRPO) ([Shao et al. 2024](https://arxiv.org/abs/2405.04434)), an RL algorithm that eliminates the massive memory footprint of a Critic model.
 
 ```
@@ -3260,7 +3257,7 @@ GRPO (No Critic Model, estimated from Group):
                                             Advantage A_i = (r_i - Mean) / Std
 ```
 
-#### 2.5.1 Mathematical Formulations
+#### 9.2.5.1 Mathematical Formulations
 Instead of training a separate Critic model of size equivalent to the Policy model (236B parameters), GRPO samples a group of $G$ outputs $\{o_1, \dots, o_G\}$ from the current policy $\pi_\theta$ for each prompt $q$. The advantage $A_i$ for each completion $o_i$ is calculated relative to the group scores:
 $$A_i = \frac{r_i - \text{mean}(\{r_1, \dots, r_G\})}{\text{std}(\{r_1, \dots, r_G\})}$$
 The policy objective is then formulated as:
@@ -3271,7 +3268,7 @@ GRPO dramatically reduces GPU memory overhead during alignment, allowing RL trai
 
 ---
 
-## 3. Structural Comparison of Modern Production LLMs
+## 9.3 Structural Comparison of Modern Production LLMs
 
 The following comparison matrix contrasts modern production MoE architectures with their predecessor sparse research baselines and dense counterparts:
 
@@ -3291,11 +3288,11 @@ The following comparison matrix contrasts modern production MoE architectures wi
 
 ---
 
-## 4. ST-MoE Fine-Tuning Insights: Transfer Quality, Freezing, and Overfitting
+## 9.4 ST-MoE Fine-Tuning Insights: Transfer Quality, Freezing, and Overfitting
 
 While pre-training scaling laws for sparse MoEs are highly consistent, downstream transfer learning introduces significant optimization challenges. The most detailed design guide addressing these transfer dynamics is **ST-MoE** ([Zoph et al. 2022](https://arxiv.org/abs/2202.08906)), which systematically analyzes overfitting, regularization, and selective training dynamics during fine-tuning.
 
-### 4.1 The Generalization Paradox and Overfitting Dynamics
+### 9.4.1 The Generalization Paradox and Overfitting Dynamics
 Sparse models excel in the high-data pre-training regime but are highly susceptible to severe overfitting when fine-tuned on smaller downstream datasets.
 *   **The Paradox:** When fine-tuning on a task with limited data (e.g., SuperGLUE's Commitment Bank, 250 sequences), sparse models converge to $100\%$ training accuracy faster than dense models, but their validation perplexity degrades rapidly, underperforming dense baselines on held-out data.
 *   **Data Scale Sensitivity:** On large-scale fine-tuning tasks (e.g., ReCORD, 138k sequences), the validation performance of sparse MoEs scales cleanly with training convergence, significantly outperforming dense baselines.
@@ -3311,7 +3308,7 @@ SuperGLUE Commitment Bank (250 examples)     SuperGLUE ReCoRD Task (138k example
      0         Steps         1000               0         Steps         50000
 ```
 
-#### 4.1.2 Regularization via Expert Dropout
+#### 9.4.1.1 Regularization via Expert Dropout
 Standard dropout applied uniformly across the network is insufficient to prevent overfitting in the massive parameter space of sparse experts.
 *   **Uniform Dropout Constraint:** Increasing global dropout (e.g., $>0.1$) degrades representation learning across shared layers and severely hurts downstream performance.
 *   **Expert Dropout Solution:** To regularize the overparameterized experts without starving the shared layers, ST-MoE introduces a specialized **Expert Dropout** scheme. The global dropout is maintained at a standard level ($0.1$), but the dropout rate is increased specifically within the internal feed-forward projection of the MoE experts:
@@ -3320,7 +3317,7 @@ Standard dropout applied uniformly across the network is insufficient to prevent
 
 ---
 
-### 4.2 Selective Parameter Freezing and Update Subsets
+### 9.4.2 Selective Parameter Freezing and Update Subsets
 During downstream transfer, updating all parameters in a giant MoE model is computationally expensive and memory-intensive. ST-MoE explores selective parameter freezing to regularize training and reduce resource requirements:
 
 ```
@@ -3331,7 +3328,7 @@ Updating Non-MoE Parameters (Saves ~80% memory/optimizer states):
 [Backprop] ──> [Embeddings] ──> [Attention Layers] ──> [Shared Layers] ──> [Experts Frozen (No Grad)]
 ```
 
-#### 4.2.1 Fine-Tuning Parameter Subsets and Performance Results
+#### 9.4.2.1 Fine-Tuning Parameter Subsets and Performance Results
 The impact of updating different parameter subsets during fine-tuning on the SuperGLUE benchmark (using the ST-MoE-L architecture, average of 5 random seeds) is detailed below:
 
 | Fine-Tuned Parameter Subset | Percentage of Model Updated | Upstream Reg. / Update Loss | Validation SuperGLUE Score |
@@ -3342,7 +3339,7 @@ The impact of updating different parameter subsets during fine-tuning on the Sup
 | **Attention Parameters Only** | $\approx 10\%$ | High | $85.8$ |
 | **MoE Experts Only** | $\approx 80\%$ | Catastrophic | $81.2$ |
 
-#### 4.2.2 Theoretical Analysis of the MoE-Only Failure Mode
+#### 9.4.2.2 Theoretical Analysis of the MoE-Only Failure Mode
 Fine-tuning *only* the MoE experts results in a severe performance drop. This failure mode can be attributed to the structural sparsity of the architecture:
 1.  **Layer Discontinuity:** In ST-MoE, MoE layers are sparse and occur only every 4th layer. Freezing all attention and shared FFN blocks prevents gradient updates across $75\%$ of the network's layers.
 2.  **FLOP-to-Parameter Disparity:** Although MoE experts represent $\approx 80\%$ of the model's static parameter footprint, a single token only routes through a fraction of them ($K=2$ experts) at any given layer. Freezing the shared pathways prevents the model from updating the core representations that coordinate these dynamic routing decisions, leading to optimization bottlenecks.
@@ -3351,7 +3348,7 @@ Conversely, fine-tuning only the **Non-MoE parameters** or **Non-MoE FFNs** prov
 
 ---
 
-### 4.3 Divergence in Hyperparameter Scaling Laws
+### 9.4.3 Divergence in Hyperparameter Scaling Laws
 One of the most critical operational insights of [Zoph et al. 2022](https://arxiv.org/abs/2202.08906) is that **sparse and dense models require completely different fine-tuning protocols**. Deploying dense-tuned hyperparameters on sparse models will often result in a total failure to transfer.
 
 ```
@@ -3375,7 +3372,7 @@ One of the most critical operational insights of [Zoph et al. 2022](https://arxi
 
 ---
 
-### 4.4 Robustness to Dropped Tokens during Fine-Tuning
+### 9.4.4 Robustness to Dropped Tokens during Fine-Tuning
 At compile time, accelerators require static shapes. The model must allocate a fixed expert capacity buffer size, controlled by the Capacity Factor ($C_f$). If an expert receives more tokens than its capacity, the excess tokens are dropped (marked as overflow) and pass directly through the residual connection without expert computation.
 
 A surprising result demonstrated in [Zoph et al. 2022](https://arxiv.org/abs/2202.08906) is that **fine-tuning performance is highly robust to token dropping**:
@@ -3385,25 +3382,25 @@ A surprising result demonstrated in [Zoph et al. 2022](https://arxiv.org/abs/220
 
 ---
 
-## 5. Modern Production Engineering and Memory/Compute Tradeoffs
+## 9.5 Modern Production Engineering and Memory/Compute Tradeoffs
 
 Deploying modern sparsely gated MoEs in production environments requires managing complex tradeoffs across hardware utilization, memory footprints, and network communication bandwidth.
 
-### 5.1 Real-World Compute and pretraining Economics
+### 9.5.1 Real-World Compute and pretraining Economics
 By activating only a fraction of their parameters per token, modern production MoEs dramatically lower the computational cost of pre-training:
 *   **Mixtral 8x7B Compute Efficiency:** Achieves the performance of a dense $70\text{B}$ parameter model while using $5\times$ fewer active parameters during inference, accelerating throughput and lowering latency under batched serving.
 *   **DeepSeek-V2 pretraining Economics:** pretraining DeepSeek 67B (Dense) required **$300.6\text{K}$ GPU hours** per trillion tokens on H800 clusters. In contrast, DeepSeek-V2 (Sparse MoE) required only **$172.8\text{K}$ GPU hours** per trillion tokens. This sparse scaling saved **$42.5\%$ in pretraining costs** while producing a model with significantly stronger capabilities.
 
 ---
 
-### 5.2 Memory Footprint and Serving Tradeoffs
+### 9.5.2 Memory Footprint and Serving Tradeoffs
 While active compute (FLOPs) scales with the active parameter count $P_{\text{active}}$, the model's memory footprint is determined by its total sparse parameter count $P_{\text{total}}$. This introduces a structural serving challenge:
 1.  **High Hardware Memory Requirements:** DeepSeek-V2's 236B total parameters require $\approx 472\text{GB}$ of memory in FP16 precision just to store the weights. This necessitates distributing the model across multiple accelerators using Tensor Parallelism (TP) or Expert Parallelism (EP), which introduces network communication overhead.
 2.  **Inference Quantization:** To mitigate serving memory overhead, modern production environments convert weights to **FP8 precision** and apply **6-bit KV Cache Quantization**. These compression techniques reduce the memory footprint by over $93\%$ compared to dense models, allowing DeepSeek-V2 to serve massive batch sizes and achieve a generation throughput of over **$50\text{K}$ tokens per second** on a single node with 8 H800 GPUs.
 
 ---
 
-### 5.3 Communication and Collective Overlap
+### 9.5.3 Communication and Collective Overlap
 Under Expert Parallelism, tokens are routed across accelerators using `AllToAll` collective communication primitives:
 *   **Network Bandwidth Bottleneck:** `AllToAll` requires high cross-node interconnect bandwidth (e.g., InfiniBand). If network communication latency is high, it can serialize execution and degrade GPU utilization.
 *   **Computation-Communication Overlapping:** To maximize throughput, modern training frameworks (e.g., HAI-LLM) overlap the computation of shared experts with the All-to-All communication of routed experts. This ensures that the accelerators remain busy with dense FFN calculations while the network handles token routing, maximizing Model FLOPs Utilization (MFU) and enabling efficient, production-scale parameter scaling.
@@ -3411,14 +3408,7 @@ Under Expert Parallelism, tokens are routed across accelerators using `AllToAll`
 
 ---
 
-
-# Section 10: A Comprehensive Synthesis & Structural Comparison of MoE Architectures {#section-10-a-comprehensive-synthesis-structural-comparison-of-moe-architectures}
-
-Mixture of Experts (MoE) architectures represent one of the most successful paradigms for scaling deep learning models, enabling model capacity to scale sublinearly with active computational cost. However, the design space of sparse models is highly multi-dimensional, spanning routing algorithms, capacity management, load-balancing losses, and system parallelization. This section provides a unified, mathematically rigorous synthesis and a detailed engineering comparison of the ten landmark MoE architectures that have defined the sparse deep learning revolution from 2017 to the present.
-
----
-
-## 1. The Architectural Evolution of Sparsity: A Ten-Paper Progression
+## 9.6 The Architectural Evolution of Sparsity: A Ten-Paper Progression
 
 The evolution of sparse modeling can be mapped as a transition from early heuristics designed to stabilize large recurrent models to highly structured, hardware-aware, and statistically optimal routing mechanisms for massive decoder-only language models.
 
@@ -3453,7 +3443,7 @@ graph TD
 
 ---
 
-## 2. Comprehensive Comparative Matrix
+## 9.7 Comprehensive Comparative Matrix
 
 | Model / Architecture | Core Gating & Routing Paradigm | Expert Capacity & Dropping Strategy | Load-Balancing & Stability Losses | System Partitioning & Parallelism | Key Empirical Breakthrough & Efficiency |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -3470,7 +3460,7 @@ graph TD
 
 ---
 
-## 3. Gating Mechanics: The Sparse vs. Dense Regimes
+## 9.8 Gating Mechanics: The Sparse vs. Dense Regimes
 
 The math of routing has transitioned from discrete approximations to continuous formulations, and finally to normalized independent activations that resolve fundamental statistical convergence limitations.
 
@@ -3485,16 +3475,16 @@ Token-Choice (Standard Top-k)         Expert-Choice (Zhou et al.)          Soft 
    (Token dropping risk)                (Perfect load balance)                (Fully differentiable mixing)
 ```
 
-### 3.1 Gating Formulations and Normalization Tactics
+### 9.8.1 Gating Formulations and Normalization Tactics
 
-#### Standard Softmax Routing (Token-Choice Top-1/Top-2)
+#### 9.8.1.1 Standard Softmax Routing (Token-Choice Top-1/Top-2)
 In standard Top-K models ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538), [Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668), [Fedus et al. 2021](https://arxiv.org/abs/2101.03961)), the gating probability of token $x$ to expert $i$ is calculated by applying a softmax over the top scoring experts:
 
 $$G(x)_i = \text{Softmax}\left(\text{KeepTopK}\left(x \cdot W_g, K\right)\right)_i = \frac{\exp(h(x)_i \cdot \mathbb{I}_i)}{\sum_{j=1}^E \exp(h(x)_j \cdot \mathbb{I}_j)}$$
 
 where $h(x) = x \cdot W_g$ represents the router logits, and $\mathbb{I}_i$ is an indicator variable denoting whether $h(x)_i$ is in the top $K$ elements.
 
-#### Expert Choice Routing (Expert-picks-Token)
+#### 9.8.1.2 Expert Choice Routing (Expert-picks-Token)
 [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) inverted this gating logic. Given token representations $X \in \mathbb{R}^{N \times d_{\text{model}}}$, the router calculates the affinity matrix $S = \text{Softmax}(X \cdot W_g) \in \mathbb{R}^{N \times E}$, where softmax is applied along the expert dimension (columns). Rather than choosing the top experts per token, each expert $e$ selects the top $k$ tokens along the token dimension (rows of $S^T$):
 
 $$G, I = \text{TopK}(S^T, k), \quad k = \frac{N \cdot c}{E}$$
@@ -3503,7 +3493,7 @@ where $c$ is the capacity factor. The expert computation is executed on the gath
 
 $$Y_e = \text{TopK\_Gather}(X, I_e) \cdot W_e$$
 
-#### Soft MoE (Continuous Token-Mixing)
+#### 9.8.1.3 Soft MoE (Continuous Token-Mixing)
 [Puigcerver et al. 2023](https://arxiv.org/abs/2308.00951) formulated a fully differentiable, non-discrete routing mechanism. Let $X \in \mathbb{R}^{m \times d}$ be the input tokens, and $\Phi \in \mathbb{R}^{d \times (n \cdot p)}$ be learnable slot parameters where $n$ is the number of experts and $p$ is the number of slots per expert. The affinity logits are computed as $A = X \Phi \in \mathbb{R}^{m \times (n \cdot p)}$.
 1. **Dispatch Weights ($D \in \mathbb{R}^{m \times (n \cdot p)}$)** are normalized per column (per slot):
    $$D_{ij} = \frac{\exp(A_{ij})}{\sum_{i'=1}^m \exp(A_{i'j})}$$
@@ -3514,7 +3504,7 @@ $$Y_e = \text{TopK\_Gather}(X, I_e) \cdot W_e$$
    The output tokens $Y \in \mathbb{R}^{m \times d}$ are recovered via:
    $$Y = C \tilde{Y}, \quad \text{where } \tilde{Y}_i = f_{\lfloor i/p \rfloor}(\tilde{X}_i)$$
 
-### 3.2 Normalized Sigmoid Gating and the Parametric Leap
+### 9.8.2 Normalized Sigmoid Gating and the Parametric Leap
 
 In standard softmax-gated MoEs, all experts compete globally because of the exponential denominator sum $\sum \exp(h(x)_j)$. [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) proved that this coupling induces an **over-specification parameter redundancy** under the standard Maximum Likelihood Estimation (MLE) framework. 
 
@@ -3526,7 +3516,7 @@ $$s_{i, t} = \frac{\sigma(u_t^T e_i)}{\sum_{j=1}^{N_r} \sigma(u_t^T e_j)}$$
 
 where $\sigma(z) = \frac{1}{1 + \exp(-z)}$ is the sigmoid activation, and $e_i$ is the routed expert centroid. 
 
-#### The Mathematical Leap
+#### 9.8.2.1 The Mathematical Leap
 Unlike softmax, where the pre-activations are coupled under the exponent, the sigmoid function operates independently before normalization. In the realistic dense/semi-dense regime, this independent activation structure prevents the over-specified experts from perfectly matching the true data distribution. 
 
 This **forces a mathematical misspecification**, shifting the convergence target to a boundary point $\check{G}_2$ where all expert parameters are **strictly distinct and well-separated**. Because the experts are well-separated, parameter overlap is impossible, and the asymptotic convergence rate collapses back to the optimal, first-order parametric rate:
@@ -3537,11 +3527,11 @@ This parametric leap slashes the sample complexity of the routed experts from **
 
 ---
 
-## 4. System Bottlenecks, Parallelism, and Memory Trade-offs
+## 9.9 System Bottlenecks, Parallelism, and Memory Trade-offs
 
 Scaling MoE models requires orchestrating parallel execution across high-performance clusters. The primary engineering bottleneck is not computational density, but the communication latency of routing tokens across physical device boundaries.
 
-### 4.1 Hybrid Parallelism Mapping
+### 9.9.1 Hybrid Parallelism Mapping
 
 To train models with hundreds of billions of parameters, systems must weave together four distinct parallelization axes:
 
@@ -3561,7 +3551,7 @@ To train models with hundreds of billions of parameters, systems must weave toge
 3. **Tensor Parallelism (TP):** Splitting individual weight matrices (e.g., standard FFN linear layers) within a single expert across multiple GPUs (e.g., inside an NVLink node). DeepSeek-V2/V3 avoids TP entirely for MoE layers by utilizing fine-grained segmentation, saving critical intra-node bandwidth.
 4. **Pipeline Parallelism (PP):** Sharding the Transformer layers sequentially across different nodes (e.g., layers 1-10 on Node 0, layers 11-20 on Node 1). Uses specialized scheduling (e.g., 16-way zero-bubble scheduling) to overlap communication with forward/backward computation.
 
-### 4.2 MegaBlocks Block-Sparse Kernel Optimization
+### 9.9.2 MegaBlocks Block-Sparse Kernel Optimization
 
 State-of-the-art frameworks (like Tutel) rely on static capacity factors, padding token sequences to satisfy GPU batch matrix multiplication (BMM) shape regularities. This introduces a severe efficiency dilemma:
 * **Low Capacity Factor:** Drops highly informative tokens, degrading validation loss.
@@ -3572,32 +3562,12 @@ State-of-the-art frameworks (like Tutel) rely on static capacity factors, paddin
 2. **Transpose Indices:** To execute the backward pass gradients without copying the massive, dynamically routed expert activations, MegaBlocks stores a secondary index of "transpose indices." This metadata maps the transposed coordinate paths, enabling efficient transposed iteration with one level of pointer indirection.
 3. **128x128 GPU Tiling:** Sets the block size to $128 \times 128$ to align with Tensor Core tile dimensions on modern NVIDIA architectures (A100/H100), ensuring the dynamic sparse kernels reach near-dense peak GPU throughput.
 
-### 4.3 Multi-Head Latent Attention (MLA) KV Cache Compression
-
-A critical bottleneck in serving large decoder-only Transformer models is the memory footprint of the Key-Value (KV) cache during auto-regressive generation. For a standard Multi-Head Attention (MHA) layer, the KV cache per token scales linearly with the model size:
-
-$$\text{Memory}_{\text{MHA}} = 2 \cdot n_h \cdot d_h \cdot l \quad \text{elements}$$
-
-where $n_h$ is the number of attention heads, $d_h$ is the dimension per head, and $l$ is the number of layers.
-
-DeepSeek-V2 resolved this by introducing **Multi-head Latent Attention (MLA)**, which utilizes a low-rank joint compression to compress Keys and Values into a small latent space:
-
-$$c^{KV}_t = W^{DKV} h_t, \quad k^C_t = W^{UK} c^{KV}_t, \quad v^C_t = W^{UV} c^{KV}_t$$
-
-where $c^{KV}_t \in \mathbb{R}^{d_c}$ is the compressed latent vector, $W^{DKV} \in \mathbb{R}^{d_c \times d}$ is the down-projection, and $W^{UK}, W^{UV} \in \mathbb{R}^{n_h d_h \times d_c}$ are the up-projection matrices. Since $d_c \ll n_h d_h$ (specifically, $d_c = 4 d_h$ in DeepSeek-V2), only the latent vector $c^{KV}_t$ needs to be cached. 
-
-#### Decoupled RoPE Strategy
-Rotary Position Embeddings (RoPE) are position-sensitive and applied directly to keys and queries: $\text{RoPE}(k_t)$. Applying RoPE directly to $k^C_t$ couples the up-projection matrix $W^{UK}$ with the position-sensitive RoPE matrix, making it mathematically impossible to absorb $W^{UK}$ into the query projection $W^Q$ at inference. This would force the system to recompute keys for all historical prefix tokens at every generation step, destroying throughput.
-
-MLA solves this by **decoupling the position embedding**. It generates a separate, low-dimensional query $q^R_{t, i} \in \mathbb{R}^{d^R_h}$ and a single, shared position-carrying key $k^R_t \in \mathbb{R}^{d^R_h}$ to carry the RoPE vectors, and concatenates them with the compressed content vectors:
-
-$$q_{t, i} = \left[ q^C_{t, i} ; q^R_{t, i} \right], \quad k_{t, i} = \left[ k^C_{t, i} ; k^R_t \right]$$
-
-This decoupled architecture allows $W^{UK}$ and $W^{UV}$ to be absorbed into $W^Q$ and $W^O$ during inference, yielding an incredible **93.3% reduction in KV cache memory** (equivalent to Grouped-Query Attention with only 2.25 groups) while preserving standard MHA representation capacity.
+> [!NOTE]
+> **Multi-Head Latent Attention (MLA) KV Cache Compression** is covered in full mathematical detail in **§2.1 (DeepSeek-V2)** earlier in this section, including the low-rank KV joint compression formulation, the decoupled RoPE strategy, and the 93.3% KV cache reduction derivation. Refer to that subsection for the complete treatment.
 
 ---
 
-## 5. Conceptual Design & Decision Guide
+## 9.10 Conceptual Design & Decision Guide
 
 ```
                             Are you training an encoder/vision
@@ -3620,22 +3590,22 @@ This decoupled architecture allows $W^{UK}$ and $W^{UV}$ to be absorbed into $W^
                                                                        with All-to-All comms
 ```
 
-### Design Rule 1: Gating Protocol Selection
+### 9.10.1 Design Rule 1: Gating Protocol Selection
 * **Use Top-1 Switch Gating** if cross-device communication bandwidth is your primary hardware bottleneck and you are scaling parameter count beyond 1T parameters.
 * **Use Expert Choice Gating** for non-causal encoder models or vision architectures where sequence-level causal masking is not required. It guarantees zero token dropping and eliminates load-balancing losses.
 * **Use Soft MoE** for visual recognition tasks (ViT) where you can represent the input as a set of mixed, continuous slot combinations. Soft MoE yields the highest upstream performance-to-FLOP pareto frontier for vision.
 * **Use Normalized Sigmoid Gating with Shared Experts (DeepSeek-V3)** for large-scale decoder-only models. It provides the optimal first-order parametric convergence rate ($\tilde{O}_P(n^{-1/2})$), drastically reducing training sample complexity.
 
-### Design Rule 2: Handling Token Overflow & Hardware Imbalance
+### 9.10.2 Design Rule 2: Handling Token Overflow & Hardware Imbalance
 * **Use MegaBlocks Block-Sparse Kernels** if you are training on high-performance GPUs (A100/H100) and cannot tolerate the downstream quality loss of dropped tokens. Block sparsity guarantees dropless MoE (dMoE) execution at near-dense speeds.
 * **Use Device-Level Token Dropping with a Capacity Factor of 1.0 during training, and dropless serving during inference (DeepSeek-V2)** if you are scaling fine-grained expert architectures across multiple nodes, ensuring strict execution bounds during training.
 
-### Design Rule 3: Memory & Serving Architecture
+### 9.10.3 Design Rule 3: Memory & Serving Architecture
 * **Always implement Multi-head Latent Attention (MLA)** for auto-regressive decoders with long context windows (32k+ tokens). MLA removes the generation-time KV cache memory bottleneck, letting you deploy large-scale sparse models on standard GPU instances.
 
 ---
 
-## 6. Key Takeaways and Future Horizons
+## 9.11 Key Takeaways and Future Horizons
 
 1. **The Fall of the Softmax Gating Paradigm:** Standard softmax gating introduces highly coupled routing pre-activations that lead to parameter over-specification and a sluggish polynomial convergence rate ($\tilde{O}_P(n^{-1/12})$). The transition to normalized sigmoid gating represents a fundamental mathematical breakthrough, securing the optimal first-order parametric convergence rate of $\tilde{O}_P(n^{-1/2})$ and accelerating specialized parameter optimization.
 2. **From Structural Padding to Block Sparsity:** Fixed-capacity routing that relies on padding and token dropping is a legacy constraint of static compiler graphs. MegaBlocks proved that block-sparse GPU kernels can handle dynamic, load-imbalanced token routing efficiently, showing that hardware co-design is vital for sparse modeling.
@@ -3644,7 +3614,7 @@ This decoupled architecture allows $W^{UK}$ and $W^{UV}$ to be absorbed into $W^
 
 ---
 
-## 7. References
+## 9.12 References
 
 * **Shazeer et al. 2017**: [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)
 * **GShard**: [Lepikhin et al. 2020 (GShard)](https://arxiv.org/abs/2006.16668)
