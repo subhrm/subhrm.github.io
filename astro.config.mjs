@@ -26,9 +26,7 @@ function mirrorPages() {
                   fs.mkdirSync(targetDir, { recursive: true });
                 }
                 const targetFile = path.join(targetDir, 'index.html');
-                if (!fs.existsSync(targetFile)) {
-                  fs.copyFileSync(fullPath, targetFile);
-                }
+                fs.copyFileSync(fullPath, targetFile);
               }
             }
           }

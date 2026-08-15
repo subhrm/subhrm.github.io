@@ -73,23 +73,56 @@ const siteTitle = title === "Subhendu's Blog" ? title : `${title} | Subhendu's B
     <!-- Mermaid Diagrams -->
     <script is:inline src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script is:inline>
-      document.addEventListener('DOMContentLoaded', function() {
-        const blocks = document.querySelectorAll('pre code.language-mermaid');
+      async function renderMermaidDiagrams() {
+        const blocks = Array.from(document.querySelectorAll('pre[data-language="mermaid"], pre.mermaid, code.language-mermaid, pre:has(> code[data-language="mermaid"])'));
         if (blocks.length === 0) return;
 
-        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
-        blocks.forEach(code => {
-          const text = code.textContent.trim();
-          const wrapper = document.createElement('div');
-          wrapper.className = 'mermaid';
-          wrapper.textContent = text;
-          const pre = code.closest('pre');
-          if (pre) {
-            pre.parentNode.replaceChild(wrapper, pre);
-          }
+        if (typeof mermaid === 'undefined') {
+          console.error('Mermaid library not loaded');
+          return;
+        }
+
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: 'default',
+          securityLevel: 'loose',
+          fontFamily: 'inherit'
         });
-        mermaid.init(undefined, document.querySelectorAll('.mermaid'));
-      });
+
+        for (let i = 0; i < blocks.length; i++) {
+          const el = blocks[i];
+          const pre = el.tagName === 'PRE' ? el : el.closest('pre') || el;
+          
+          const lines = pre.querySelectorAll('.line');
+          let codeText = '';
+          if (lines.length > 0) {
+            codeText = Array.from(lines).map(l => l.textContent).join('\n').trim();
+          } else {
+            codeText = (pre.textContent || '').trim();
+          }
+
+          if (!codeText) continue;
+
+          try {
+            const id = `mermaid-svg-${i}-${Math.random().toString(36).substring(2, 9)}`;
+            const { svg } = await mermaid.render(id, codeText);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mermaid';
+            wrapper.innerHTML = svg;
+            if (pre.parentNode) {
+              pre.parentNode.replaceChild(wrapper, pre);
+            }
+          } catch (err) {
+            console.error('Mermaid render error for diagram ' + i, err);
+          }
+        }
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', renderMermaidDiagrams);
+      } else {
+        renderMermaidDiagrams();
+      }
     </script>
   </head>
   <body class="flex flex-col min-h-screen">
