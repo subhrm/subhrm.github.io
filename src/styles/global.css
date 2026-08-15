@@ -21,6 +21,28 @@
   }
 }
 
+/* Site Layout Container Width: Default Wide = 90%, Narrow = 56rem (max-w-4xl) */
+.site-container {
+  max-width: 90%;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  transition: max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html.narrow-layout .site-container {
+  max-width: 56rem;
+}
+
+/* Width toggle icon visibility: Default Wide shows collapse, Narrow shows expand */
+html.narrow-layout #width-toggle-expand {
+  display: block;
+}
+
+html.narrow-layout #width-toggle-collapse {
+  display: none;
+}
+
 /* Post / Markdown Typography */
 .prose {
   max-width: 100%;

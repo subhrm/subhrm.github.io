@@ -1,0 +1,79 @@
+---
+---
+
+<button
+  id="width-toggle"
+  type="button"
+  aria-label="Switch to narrow view"
+  title="Switch to narrow view"
+  class="relative inline-flex items-center justify-center p-2 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/70 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+>
+  <!-- Collapse / Narrow Icon (shown by default in wide mode) -->
+  <svg
+    id="width-toggle-collapse"
+    class="w-5 h-5 block transition-transform duration-200 hover:scale-110"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M4 4v16"></path>
+    <path d="M20 4v16"></path>
+    <path d="M7 9l3 3-3 3"></path>
+    <path d="M10 12H4"></path>
+    <path d="M17 9l-3 3 3 3"></path>
+    <path d="M14 12h6"></path>
+  </svg>
+
+  <!-- Expand / Wide Icon (shown when in narrow mode) -->
+  <svg
+    id="width-toggle-expand"
+    class="w-5 h-5 hidden transition-transform duration-200 hover:scale-110"
+    fill="none"
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M4 4v16"></path>
+    <path d="M20 4v16"></path>
+    <path d="M14 9l3 3-3 3"></path>
+    <path d="M17 12H7"></path>
+    <path d="M10 15l-3-3 3-3"></path>
+  </svg>
+</button>
+
+<script is:inline>
+  function setupWidthToggle() {
+    const toggleBtn = document.getElementById('width-toggle');
+    if (!toggleBtn) return;
+
+    function updateAriaAndTitle() {
+      const isNarrow = document.documentElement.classList.contains('narrow-layout');
+      const label = isNarrow ? 'Switch to wide view' : 'Switch to narrow view';
+      toggleBtn.setAttribute('aria-label', label);
+      toggleBtn.setAttribute('title', label);
+    }
+
+    updateAriaAndTitle();
+
+    toggleBtn.addEventListener('click', () => {
+      const isNarrow = document.documentElement.classList.contains('narrow-layout');
+      if (isNarrow) {
+        document.documentElement.classList.remove('narrow-layout');
+        localStorage.setItem('layout-width', 'wide');
+      } else {
+        document.documentElement.classList.add('narrow-layout');
+        localStorage.setItem('layout-width', 'narrow');
+      }
+      updateAriaAndTitle();
+    });
+  }
+
+  // Run on initial load and after Astro page transitions if any
+  setupWidthToggle();
+  document.addEventListener('astro:after-swap', setupWidthToggle);
+</script>

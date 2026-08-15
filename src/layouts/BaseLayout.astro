@@ -29,7 +29,7 @@ const siteTitle = title === "Subhendu's Blog" ? title : `${title} | Subhendu's B
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="generator" content={Astro.generator} />
 
-    <!-- Theme Initialization Script (Anti-FOUC) -->
+    <!-- Theme & Layout Initialization Script (Anti-FOUC) -->
     <script is:inline>
       (function() {
         const storedTheme = typeof localStorage !== 'undefined' ? localStorage.getItem('theme') : null;
@@ -37,6 +37,13 @@ const siteTitle = title === "Subhendu's Blog" ? title : `${title} | Subhendu's B
           document.documentElement.classList.add('dark');
         } else {
           document.documentElement.classList.remove('dark');
+        }
+
+        const storedWidth = typeof localStorage !== 'undefined' ? localStorage.getItem('layout-width') : null;
+        if (storedWidth === 'narrow') {
+          document.documentElement.classList.add('narrow-layout');
+        } else {
+          document.documentElement.classList.remove('narrow-layout');
         }
       })();
     </script>
@@ -140,7 +147,7 @@ const siteTitle = title === "Subhendu's Blog" ? title : `${title} | Subhendu's B
   </head>
   <body class="flex flex-col min-h-screen text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-[#090d16]">
     <Header />
-    <main class="flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+    <main class="site-container flex-1 px-4 sm:px-6 py-8 sm:py-12">
       <div class="bg-white/95 dark:bg-slate-900/90 backdrop-blur-md rounded-2xl shadow-xl shadow-slate-900/5 dark:shadow-black/40 border border-slate-200/80 dark:border-slate-800 p-6 sm:p-10 md:p-12 transition-colors duration-200">
         <slot />
       </div>
