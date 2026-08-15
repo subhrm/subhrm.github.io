@@ -1,0 +1,58 @@
+---
+import BaseLayout from './BaseLayout.astro';
+
+interface Props {
+  title: string;
+  date: Date;
+  categories?: string | string[];
+  description?: string;
+}
+
+const { title, date, categories, description } = Astro.props;
+
+const formattedDate = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+}).format(date);
+
+const categoryList = Array.isArray(categories) 
+  ? categories 
+  : categories 
+    ? [categories] 
+    : [];
+---
+
+<BaseLayout title={title} description={description} article={true}>
+  <article>
+    <div class="mb-8 pb-6 border-b border-slate-200">
+      <div class="flex items-center gap-2 mb-3">
+        <a href="/" class="text-sm font-medium text-sky-600 hover:text-sky-700 inline-flex items-center gap-1">
+          ← Back to home
+        </a>
+      </div>
+      <h1 class="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight mb-4 leading-tight">
+        {title}
+      </h1>
+      <div class="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+        <time datetime={date.toISOString()}>{formattedDate}</time>
+        {categoryList.length > 0 && (
+          <div class="flex items-center gap-1.5">
+            <span>•</span>
+            <div class="flex items-center gap-1.5">
+              {categoryList.map((cat) => (
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200/60 uppercase tracking-wide">
+                  {cat}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+    
+    <div class="prose prose-slate max-w-none">
+      <slot />
+    </div>
+  </article>
+</BaseLayout>

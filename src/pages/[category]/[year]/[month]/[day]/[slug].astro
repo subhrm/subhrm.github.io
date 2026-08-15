@@ -1,0 +1,63 @@
+---
+import { getCollection, render } from 'astro:content';
+import PostLayout from '@/layouts/PostLayout.astro';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('posts');
+  const paths: any[] = [];
+
+  for (const post of posts) {
+    const rawPath = post.filePath || post.id;
+    const baseName = rawPath.split('/').pop()?.replace(/\.md$/, '') || post.id;
+    const match = baseName.match(/^(\d{4})-(\d{2})-(\d{2})-(.+)$/);
+    const year = match ? match[1] : String(post.data.date.getFullYear());
+    const month = match ? match[2] : String(post.data.date.getMonth() + 1).padStart(2, '0');
+    const day = match ? match[3] : String(post.data.date.getDate()).padStart(2, '0');
+    const originalSlug = match ? match[4] : baseName;
+
+    const category = Array.isArray(post.data.categories)
+      ? post.data.categories[0]
+      : (post.data.categories || 'post');
+
+    // Add exact case slug (e.g. Mixture-of-Experts)
+    paths.push({
+      params: {
+        category,
+        year,
+        month,
+        day,
+        slug: originalSlug,
+      },
+      props: { post },
+    });
+
+    // Also add lowercase slug if different, for total compatibility
+    if (originalSlug !== originalSlug.toLowerCase()) {
+      paths.push({
+        params: {
+          category,
+          year,
+          month,
+          day,
+          slug: originalSlug.toLowerCase(),
+        },
+        props: { post },
+      });
+    }
+  }
+
+  return paths;
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+---
+
+<PostLayout
+  title={post.data.title}
+  date={post.data.date}
+  categories={post.data.categories}
+  description={post.data.description}
+>
+  <Content />
+</PostLayout>

@@ -1,5 +1,13 @@
-_site
-.sass-cache
-.jekyll-cache
-.jekyll-metadata
-vendor
+# Build and dependencies
+node_modules/
+dist/
+.astro/
+
+# Environment variables
+.env
+.env.production
+.env.local
+
+# OS / Editor
+.DS_Store
+*.log
