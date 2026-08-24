@@ -233,6 +233,31 @@ mjx-container {
   padding: 0.25rem 0;
 }
 
+/* remark-math output nodes (typeset by MathJax client-side) */
+.prose pre:has(> code.language-math.math-display),
+.prose div.math-display {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0.5rem 0;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.prose code.language-math {
+  background: transparent;
+  color: inherit;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.prose code.language-math.math-display {
+  display: block;
+  text-align: center;
+}
+
 /* Mermaid diagrams */
 .mermaid {
   display: flex;

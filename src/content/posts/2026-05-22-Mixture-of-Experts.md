@@ -78,10 +78,16 @@ The core mathematical appeal of MoE models lies in their ability to scale capaci
 
 ### 1.2.1 Parameter Formulations in Transformers
 Consider a standard dense Transformer layer with hidden dimension $d_{\text{model}}$ and an intermediate FFN dimension $d_{\text{ff}}$ (typically $d_{\text{ff}} = 4 \cdot d_{\text{model}}$). The FFN block consists of two linear projections:
-$$h = \text{Activation}\left(X \cdot W_1 + b_1\right)$$
-$$Y = h \cdot W_2 + b_2$$
+$$
+h = \text{Activation}\left(X \cdot W_1 + b_1\right)
+$$
+$$
+Y = h \cdot W_2 + b_2
+$$
 Where $W_1 \in \mathbb{R}^{d_{\text{model}} \times d_{\text{ff}}}$ and $W_2 \in \mathbb{R}^{d_{\text{ff}} \times d_{\text{model}}}$. Neglecting the bias terms, the parameters of the dense FFN block are:
-$$P_{\text{dense\_FFN}} = 2 \cdot d_{\text{model}} \cdot d_{\text{ff}}$$
+$$
+P_{\text{dense\_FFN}} = 2 \cdot d_{\text{model}} \cdot d_{\text{ff}}
+$$
 
 In an MoE Transformer layer, the dense FFN is replaced by a Sparsely-Gated MoE FFN layer containing $E$ independent experts, where each expert $\text{FFN}_e$ is an FFN block with parameters identical in shape to $P_{\text{dense\_FFN}}$. 
 
@@ -109,11 +115,15 @@ The router network parameters $W_r \in \mathbb{R}^{d_{\text{model}} \times E}$ a
 
 #### 1.2.1.1 Total Parameters ($P_{\text{total}}$)
 The total parameters in the MoE layer represent the storage footprint required in memory (SRAM or HBM across devices):
-$$P_{\text{total}} = E \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx E \cdot P_{\text{dense\_FFN}}$$
+$$
+P_{\text{total}} = E \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx E \cdot P_{\text{dense\_FFN}}
+$$
 
 #### 1.2.1.2 Active Parameters ($P_{\text{active}}$)
 The active parameters represent the subset of weights executed per individual token during the forward pass:
-$$P_{\text{active}} = k \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx k \cdot P_{\text{dense\_FFN}}$$
+$$
+P_{\text{active}} = k \cdot \left( 2 \cdot d_{\text{model}} \cdot d_{\text{ff}} \right) + d_{\text{model}} \cdot E \approx k \cdot P_{\text{dense\_FFN}}
+$$
 Where $k$ is the number of experts activated per token ($k \ll E$). 
 
 When scaling the model by increasing the number of experts $E$, $P_{\text{total}}$ scales **linearly** with $E$, whereas $P_{\text{active}}$ remains virtually **constant**.
@@ -121,12 +131,18 @@ When scaling the model by increasing the number of experts $E$, $P_{\text{total}
 ### 1.2.2 Mathematical Complexity and FLOPs
 Let $N$ be the sequence length (number of tokens in the batch). The computational complexity of the dense and MoE FFN layers can be formalized in terms of floating-point operations (FLOPs). Assuming 2 FLOPs per multiply-accumulate operation:
 
-$$\text{FLOPs}_{\text{dense}} = 2 \cdot N \cdot P_{\text{dense\_FFN}} = 4 \cdot N \cdot d_{\text{model}} \cdot d_{\text{ff}}$$
+$$
+\text{FLOPs}_{\text{dense}} = 2 \cdot N \cdot P_{\text{dense\_FFN}} = 4 \cdot N \cdot d_{\text{model}} \cdot d_{\text{ff}}
+$$
 
-$$\text{FLOPs}_{\text{MoE}} = \underbrace{2 \cdot N \cdot d_{\text{model}} \cdot E}_{\text{Router Layer}} + \underbrace{2 \cdot k \cdot N \cdot P_{\text{dense\_FFN}}}_{\text{Expert Computation}} + \underbrace{O(\text{Communication Overhead})}_{\text{All-to-All / Partition Resharding}}$$
+$$
+\text{FLOPs}_{\text{MoE}} = \underbrace{2 \cdot N \cdot d_{\text{model}} \cdot E}_{\text{Router Layer}} + \underbrace{2 \cdot k \cdot N \cdot P_{\text{dense\_FFN}}}_{\text{Expert Computation}} + \underbrace{O(\text{Communication Overhead})}_{\text{All-to-All / Partition Resharding}}
+$$
 
 Since $E \ll d_{\text{model}}$ and the communication overhead scales sublinearly with hardware size when properly partitioned, we get:
-$$\text{FLOPs}_{\text{MoE}} \approx 2 \cdot k \cdot N \cdot P_{\text{dense\_FFN}} = k \cdot \text{FLOPs}_{\text{dense}}$$
+$$
+\text{FLOPs}_{\text{MoE}} \approx 2 \cdot k \cdot N \cdot P_{\text{dense\_FFN}} = k \cdot \text{FLOPs}_{\text{dense}}
+$$
 
 For $k=1$ (Switch Transformer), the computational complexity per token of a sparse MoE model with hundreds of billions of total parameters is mathematically identical to a small dense model containing only a single expert's worth of parameters.
 
@@ -184,15 +200,23 @@ The router maps an input representation $x \in \mathbb{R}^{d_{\text{model}}}$ to
 
 #### 1.3.1.1 Classic Softmax Gating (Non-Sparse)
 The simplest gating mechanism applies a parameterized projection followed by a softmax activation:
-$$G_{\sigma}(x) = \text{Softmax}(x \cdot W_r)$$
+$$
+G_{\sigma}(x) = \text{Softmax}(x \cdot W_r)
+$$
 This results in a dense routing vector where $G_{\sigma}(x)_i > 0$ for all experts. It offers no computational savings, as all $E$ experts must be evaluated.
 
 #### 1.3.1.2 Noisy Top-K Gating
 To enforce sparsity while maintaining a differentiable formulation, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) introduced noisy top-$k$ gating:
-$$H(x)_i = (x \cdot W_r)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)$$
+$$
+H(x)_i = (x \cdot W_r)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)
+$$
 Where $W_r, W_{\text{noise}} \in \mathbb{R}^{d_{\text{model}} \times E}$, and $\epsilon \sim \mathcal{N}(0, 1)$ is standard Gaussian noise drawn independently per step. The routing vector is defined by keeping only the top-$k$ pre-activation elements and setting the rest to $-\infty$:
-$$\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the top } k \text{ elements of } v, \\ -\infty & \text{otherwise.} \end{cases}$$
-$$G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right)$$
+$$
+\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the top } k \text{ elements of } v, \\ -\infty & \text{otherwise.} \end{cases}
+$$
+$$
+G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right)
+$$
 *   **Gradient Flow:** If $k > 1$ (e.g., $k=2$), the gating weights $W_r$ receive active gradients because the gate outputs for the top-$k$ experts are continuously dependent on the inputs and weights via the softmax function. Gradients backpropagate directly through the gating network to the preceding layers.
 
 #### 1.3.1.3 GShard Top-2 Gating with Capacity Constraints
@@ -201,23 +225,35 @@ $$G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right)$$
 2.  Select the top-2 experts $e_1$ and $e_2$ with logits $g_1, g_2$.
 3.  **First Expert Dispatch:** The token is sent to the first expert $e_1$ with a normalized weight $g_1' = \frac{g_1}{g_1 + g_2}$ if the expert's current token count $c_{e_1}$ has not exceeded the strict expert capacity threshold $C$.
 4.  **Second Expert Randomized Routing:** To conserve overall expert capacity, GShard dispatches the token to the second expert $e_2$ with probability proportional to its relative weight $g_2$:
-    $$\text{rnd} \sim \mathcal{U}(0, 1)$$
-    $$\text{Dispatch if: } c_{e_2} < C \quad \wedge \quad 2 \cdot g_2' > \text{rnd}$$
+$$
+\text{rnd} \sim \mathcal{U}(0, 1)
+$$
+$$
+\text{Dispatch if: } c_{e_2} < C \quad \wedge \quad 2 \cdot g_2' > \text{rnd}
+$$
     If dispatched, it receives a normalized weight $g_2' = \frac{g_2}{g_1 + g_2}$. If an expert is over capacity, the token is marked as overflown and bypasses the expert layer entirely via a residual connection.
 
 #### 1.3.1.4 Switch Routing (Top-1 Gating)
 [Fedus et al. 2021 (Switch Transformers)](https://arxiv.org/abs/2101.03961) simplified the routing strategy to $k=1$:
-$$p_i(x) = \text{Softmax}\left(W_r \cdot x + \text{Noise}\right)_i$$
-$$i^* = \text{argmax}_i \, p_i(x)$$
+$$
+p_i(x) = \text{Softmax}\left(W_r \cdot x + \text{Noise}\right)_i
+$$
+$$
+i^* = \text{argmax}_i \, p_i(x)
+$$
 The token is routed solely to expert $i^*$, and the layer output is scaled by its gate value:
-$$Y = p_{i^*}(x) \cdot \text{FFN}_{i^*}(x)$$
+$$
+Y = p_{i^*}(x) \cdot \text{FFN}_{i^*}(x)
+$$
 *   **Justification:** While Shazeer et al. conjectured that $k > 1$ was necessary to generate non-trivial routing gradients (to compare at least two experts), Fedus et al. empirically demonstrated that Top-1 routing performs stably, preserves model quality, halves the required expert buffer sizes, and scales cleanly to hundreds of experts while minimizing All-to-All network communication.
 
 ---
 
 ### 1.3.2 The Expert Layer Integration
 The experts are typically parameterized as identical Feed-Forward Networks (FFNs) but operate with independent weight matrices. The output of the MoE layer $Y$ is the weighted sum over all $E$ experts:
-$$Y = \sum_{e=1}^{E} G(x)_e \cdot \text{FFN}_e(x)$$
+$$
+Y = \sum_{e=1}^{E} G(x)_e \cdot \text{FFN}_e(x)
+$$
 
 In Transformer architectures, the MoE layer is typically substituted into **every other** Transformer block (i.e., replacing the FFN in alternate layers) or inserted at specified regular intervals. The self-attention layers remain shared (dense) to preserve global contextual processing, while FFN layers are sparsely scaled.
 
@@ -226,36 +262,60 @@ In Transformer architectures, the MoE layer is typically substituted into **ever
 ### 1.3.3 Load Balancing and Gating Optimization
 
 Unconstrained routing optimization naturally collapses into a degenerative state where the router routes all tokens to the same expert. To force uniform utilization, models incorporate auxiliary loss terms into the training objective:
-$$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{task}} + w_{\text{aux}} \cdot \mathcal{L}_{\text{aux}}$$
+$$
+\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{task}} + w_{\text{aux}} \cdot \mathcal{L}_{\text{aux}}
+$$
 
 #### 1.3.3.1 Shazeer et al. 2017: Importance and Load Losses
 Shazeer et al. used two separate loss terms:
 1.  **Importance Loss ($\mathcal{L}_{\text{importance}}$):** Pushes the total gate weights per expert toward uniform allocation:
-    $$\text{Importance}(X) = \sum_{x \in X} G(x)$$
-    $$\mathcal{L}_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}\left(\text{Importance}(X)\right)^2$$
+$$
+\text{Importance}(X) = \sum_{x \in X} G(x)
+$$
+$$
+\mathcal{L}_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}\left(\text{Importance}(X)\right)^2
+$$
     Where $\text{CV}(v)$ is the Coefficient of Variation, defined as the standard deviation divided by the mean:
-    $$\text{CV}(v) = \frac{\sqrt{\frac{1}{N}\sum_{j=1}^N (v_j - \bar{v})^2}}{\bar{v}}$$
+$$
+\text{CV}(v) = \frac{\sqrt{\frac{1}{N}\sum_{j=1}^N (v_j - \bar{v})^2}}{\bar{v}}
+$$
 2.  **Load Loss ($\mathcal{L}_{\text{load}}$):** Pushes the actual number of examples processed by each expert to be uniform. Since the counting of examples is discrete and non-differentiable, they formulated a smooth, differentiable estimator of the probability $P(x, i)$ that token $x$ is selected in the top-$k$:
-    $$P(x, i) = \Phi\left( \frac{(x \cdot W_r)_i - \text{kth\_excluding}(H(x), k, i)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right)$$
+$$
+P(x, i) = \Phi\left( \frac{(x \cdot W_r)_i - \text{kth\_excluding}(H(x), k, i)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right)
+$$
     Where $\Phi(z)$ is the standard normal Cumulative Distribution Function (CDF), and $\text{kth\_excluding}(v, k, i)$ returns the $k$-th largest element of vector $v$ excluding index $i$. The load and its loss are defined as:
-    $$\text{Load}(X) = \sum_{x \in X} P(x, i)$$
-    $$\mathcal{L}_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2$$
+$$
+\text{Load}(X) = \sum_{x \in X} P(x, i)
+$$
+$$
+\mathcal{L}_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2
+$$
 
 #### 1.3.3.2 GShard Group-Level Auxiliary Loss
 GShard groups tokens into $G$ parallel groups of size $S$. To enforce uniform routing across the $E$ experts, they minimize:
-$$\mathcal{L}_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \frac{c_e}{S} \cdot m_e$$
+$$
+\mathcal{L}_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \frac{c_e}{S} \cdot m_e
+$$
 Where $c_e$ is the discrete count of tokens in the group routed to expert $e$ (non-differentiable), and $m_e$ is the differentiable average routing probability assigned to expert $e$ across the group tokens:
-$$m_e = \frac{1}{S} \sum_{s=1}^S g_{s, e}$$
+$$
+m_e = \frac{1}{S} \sum_{s=1}^S g_{s, e}
+$$
 By multiplying the non-differentiable actual routing fraction $c_e/S$ with the fully differentiable probability proxy $m_e$, gradient descent can propagate updates back to the router weights to shift probability mass away from overloaded experts.
 
 #### 1.3.3.3 Switch Transformer Simplified Load-Balancing Loss
 Switch Transformers consolidated load balancing into a single, clean auxiliary loss. Given $N$ experts and a batch $B$ with $T$ tokens, the loss is the scaled dot-product between the token dispatch fraction vector $f$ and the router probability fraction vector $P$:
-$$\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i$$
+$$
+\mathcal{L}_{\text{bal}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i
+$$
 Where:
 *   $f_i$ is the actual fraction of tokens dispatched to expert $i$:
-    $$f_i = \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}}$$
+$$
+f_i = \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}}
+$$
 *   $P_i$ is the fraction of total router probability allocated to expert $i$:
-    $$P_i = \frac{1}{T} \sum_{x \in B} p_i(x)$$
+$$
+P_i = \frac{1}{T} \sum_{x \in B} p_i(x)
+$$
 
 The loss is minimized under a uniform distribution where $f_i = 1/N$ and $P_i = 1/N$ for all experts. Pushing both distributions toward uniform routing ensures that the computational load is balanced evenly across all hardware devices hosting the experts. The hyperparameter $\alpha$ is a multiplier, typically set to $10^{-2}$ (or $0.01$).
 
@@ -267,7 +327,9 @@ Translating theoretical MoE formulations into high-performance execution require
 
 ### 1.4.1 The Shrinking Batch and Communication Bottlenecks
 In standard distributed training, data-parallel replicas process distinct batches of size $b$ synchronously across $d$ devices. If an MoE layer contains $E$ experts, a naive local implementation means each expert receives a micro-batch of size:
-$$b_{\text{local\_expert}} \approx \frac{k \cdot b}{E}$$
+$$
+b_{\text{local\_expert}} \approx \frac{k \cdot b}{E}
+$$
 For large clusters with hundreds of experts, $b_{\text{local\_expert}} \to 0$, causing execution to become memory-bandwidth bound. 
 
 To solve this, Shazeer et al. introduced a critical engineering paradigm: **mixing data parallelism and model parallelism**.
@@ -275,7 +337,9 @@ To solve this, Shazeer et al. introduced a critical engineering paradigm: **mixi
 2.  Each device hosts exactly one (or a subset of) the $E$ experts (model-parallel sharding).
 3.  Before the MoE computation, a global communication barrier consolidates the tokens from all $d$ replicas. 
 4.  The combined batch of size $b \cdot d$ is routed synchronously. Each expert now receives a highly optimized, computationally dense batch of size:
-    $$b_{\text{efficient\_expert}} \approx \frac{k \cdot b \cdot d}{E}$$
+$$
+b_{\text{efficient\_expert}} \approx \frac{k \cdot b \cdot d}{E}
+$$
 5.  This achieves a factor of $d$ improvement in expert batch size, restoring high arithmetic intensity on the hardware accelerators.
 
 ```
@@ -290,7 +354,9 @@ Device 3 (Data Replica 3): ──> [Token 3a, Token 3b] ──┘               
 ### 1.4.2 Expert Capacity and Token Dropping
 Because token routing is dynamic, some experts will naturally receive more tokens than average in any given batch. Since accelerators require statically shaped tensors at compile time, we must define a rigid buffer size per expert, termed the **Expert Capacity ($C_e$)**:
 
-$$C_e = \left( \frac{\text{Tokens Per Batch}}{\text{Number of Experts}} \right) \times C_f$$
+$$
+C_e = \left( \frac{\text{Tokens Per Batch}}{\text{Number of Experts}} \right) \times C_f
+$$
 Where $C_f$ is the **Capacity Factor**.
 *   **$C_f = 1.0$ (Minimum Capacity):** If tokens are not perfectly balanced, any expert receiving more than its fair share will drop tokens.
 *   **$C_f > 1.0$ (Buffer Capacity):** Standard capacity factors (e.g., $1.25$, $1.5$, or $2.0$) create an extra buffer to accommodate routing variance, mitigating token dropping at the cost of memory overhead (padding empty slots with zeros).
@@ -359,49 +425,75 @@ Below is a detailed trace of the tensor layouts, shapes, and communication trans
 1.  **Input Formulation:** 
     *   Let the global input tensor shape be `[Batch, Seq_Len, d_model]`.
     *   The input is annotated with `split` along the batch dimension:
-        $$\text{Layout on device } c: \quad X_{\text{local}} \in \mathbb{R}^{\frac{\text{Batch}}{D} \times \text{Seq\_Len} \times d_{\text{model}}}$$
+$$
+\text{Layout on device } c: \quad X_{\text{local}} \in \mathbb{R}^{\frac{\text{Batch}}{D} \times \text{Seq\_Len} \times d_{\text{model}}}
+$$
     *   This is reshaped locally into:
-        $$\text{Shape: } \quad [G, S, d_{\text{model}}]$$
+$$
+\text{Shape: } \quad [G, S, d_{\text{model}}]
+$$
         Where $G$ is the group count (aligned to device count $D$), and $S$ is the tokens per core.
 
 2.  **Router Logits and Gating:**
     *   The router weights $W_r \in \mathbb{R}^{d_{\text{model}} \times E}$ are annotated with `replicate` and are present on all devices.
     *   Compute logits via local einsum:
-        $$\text{logits} = \text{einsum}\left([G, S, d_{\text{model}}], [d_{\text{model}}, E]\right) \to [G, S, E]$$
+$$
+\text{logits} = \text{einsum}\left([G, S, d_{\text{model}}], [d_{\text{model}}, E]\right) \to [G, S, E]
+$$
     *   Calculate gating probabilities and Top-1 selection:
-        $$G(x) \to [G, S, E] \quad (\text{one-hot mask})$$
+$$
+G(x) \to [G, S, E] \quad (\text{one-hot mask})
+$$
 
 3.  **Dynamic Dispatch and Local Token Packing:**
     *   Compute cumulative sum over tokens to calculate local position in expert buffers:
-        $$\text{position\_in\_expert} = \text{cumsum}(G(x), \text{dim}=S) \cdot G(x) \to [G, S, E]$$
+$$
+\text{position\_in\_expert} = \text{cumsum}(G(x), \text{dim}=S) \cdot G(x) \to [G, S, E]
+$$
     *   Filter out tokens exceeding expert capacity $C$:
-        $$\text{dispatch\_mask} \to [G, S, E, C] \quad (\text{binary matrix})$$
+$$
+\text{dispatch\_mask} \to [G, S, E, C] \quad (\text{binary matrix})
+$$
 
 4.  **All-to-All Dispatch Phase (Global Comm Barrier):**
     *   The local inputs are multiplied with the dispatch mask:
-        $$\text{expert\_inputs\_local} = \text{einsum}\left([G, S, d_{\text{model}}], [G, S, E, C]\right) \to [E, G, C, d_{\text{model}}]$$
+$$
+\text{expert\_inputs\_local} = \text{einsum}\left([G, S, d_{\text{model}}], [G, S, E, C]\right) \to [E, G, C, d_{\text{model}}]
+$$
         *   At this stage, the tensor is partitioned along the group dimension $G$ (`Layout: [1, n, 1, 1]`).
     *   An **`AllToAll` collective communication** is triggered to change the sharding dimension from the group ($G$) dimension to the expert ($E$) dimension.
     *   This reorganizes the buffers across devices:
-        $$\text{expert\_inputs\_sharded} \to [E, G, C, d_{\text{model}}] \quad (\text{Layout: [n, 1, 1, 1]})$$
+$$
+\text{expert\_inputs\_sharded} \to [E, G, C, d_{\text{model}}] \quad (\text{Layout: [n, 1, 1, 1]})
+$$
         *   *Result:* Each device $i$ now hosts all the tokens routed globally to the specific expert $e_i$ it is responsible for.
 
 5.  **Expert FFN Execution:**
     *   The local expert executes standard FFN projections:
-        $$H = \text{ReLU}\left(\text{einsum}\left([E_{\text{local}}, G, C, d_{\text{model}}], W_{\text{in}}\right)\right)$$
-        $$Y_{\text{expert}} = \text{einsum}\left(H, W_{\text{out}}\right) \to [E, G, C, d_{\text{model}}]$$
+$$
+H = \text{ReLU}\left(\text{einsum}\left([E_{\text{local}}, G, C, d_{\text{model}}], W_{\text{in}}\right)\right)
+$$
+$$
+Y_{\text{expert}} = \text{einsum}\left(H, W_{\text{out}}\right) \to [E, G, C, d_{\text{model}}]
+$$
         *   *Computational Density:* Since the cores are sharded along $E$ (`Layout: [n, 1, 1, 1]`), this FFN matrix multiplication executes at maximum arithmetic throughput on local device accelerators.
 
 6.  **All-to-All Recombine Phase:**
     *   A second **`AllToAll` collective communication** is triggered to return the layout back to core-partitioning.
     *   This reshards the tensor back from expert dimension $E$ to group dimension $G$:
-        $$\text{expert\_outputs\_local} \to [E, G, C, d_{\text{model}}] \quad (\text{Layout: [1, n, 1, 1]})$$
+$$
+\text{expert\_outputs\_local} \to [E, G, C, d_{\text{model}}] \quad (\text{Layout: [1, n, 1, 1]})
+$$
 
 7.  **Final Token Recombination:**
     *   The outputs are recombined with the gating probabilities ($combine\_weights$):
-        $$\text{outputs\_local} = \text{einsum}\left([E, G, C, d_{\text{model}}], G(x)_{\text{combine}}\right) \to [G, S, d_{\text{model}}]$$
+$$
+\text{outputs\_local} = \text{einsum}\left([E, G, C, d_{\text{model}}], G(x)_{\text{combine}}\right) \to [G, S, d_{\text{model}}]
+$$
     *   Reshape back to the original layout:
-        $$\text{outputs} \to [\text{Batch}, \text{Seq\_Len}, d_{\text{model}}]$$
+$$
+\text{outputs} \to [\text{Batch}, \text{Seq\_Len}, d_{\text{model}}]
+$$
 
 ---
 
@@ -441,7 +533,9 @@ Standard low-precision training (bfloat16) is highly susceptible to divergence i
 ### 1.6.2 Reduced Initialization Scale
 Deep sparse models are prone to early gradient explosions. Switch Transformers demonstrated that standard initialization scales (e.g., $s = 1.0$) for truncated normal distributions do not scale stably to hundreds of experts.
 *   **Remedy:** Reduce the weight initialization scale by a factor of 10 ($s = 0.1$). Elements are drawn from a truncated normal distribution with mean $\mu = 0$ and standard deviation:
-    $$\sigma = \sqrt{\frac{0.1}{n_{\text{in}}}}$$
+$$
+\sigma = \sqrt{\frac{0.1}{n_{\text{in}}}}
+$$
     Where $n_{\text{in}}$ is the fan-in (number of input units) of the weight matrix.
 *   *Impact:* Reduces the standard deviation of initial quality metric outputs from $0.68$ to $0.01$, stabilizing initialization and allowing models to scale seamlessly to over a trillion parameters.
 
@@ -467,14 +561,18 @@ Under the standard dense neural network paradigm, every parameter is activated f
 
 In a Sparse MoE layer, the model consists of a set of $N$ independent expert networks $\{E_1, E_2, \dots, E_N\}$, typically parameterized as identical FFN blocks but with separate weights. A trainable gating network $G(x)$ determines a sparse routing vector over these experts for a given token representation $x \in \mathbb{R}^{d_{\text{model}}}$. The mathematical output $y \in \mathbb{R}^{d_{\text{model}}}$ of the MoE layer is written as:
 
-$$y = \sum_{i=1}^N G(x)_i E_i(x) \quad \text{(Eq. 1)}$$
+$$
+y = \sum_{i=1}^N G(x)_i E_i(x) \quad \text{(Eq. 1)}
+$$
 
 where $G(x)_i \ge 0$ is the gating coefficient for expert $i$, and $\sum_{i=1}^N G(x)_i = 1$ (if fully normalized) or represents a sparse subset. Computational savings are realized directly from the sparsity of $G(x)$: whenever $G(x)_i = 0$, the corresponding expert output $E_i(x)$ does not need to be computed, eliminating the associated FLOPs ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)).
 
 ### 2.1.2 Softmax Gating (Jordan & Jacobs, 1994)
 In classical hierarchical mixtures of experts ([Jordan & Jacobs, 1994](https://arxiv.org/abs/2006.16668)), the gating network is parameterized as a simple linear projection followed by a softmax activation:
 
-$$G_{\sigma}(x) = \text{Softmax}(x \cdot W_g) \quad \text{(Eq. 2)}$$
+$$
+G_{\sigma}(x) = \text{Softmax}(x \cdot W_g) \quad \text{(Eq. 2)}
+$$
 
 where $W_g \in \mathbb{R}^{d_{\text{model}} \times N}$ represents the routing parameters. 
 **Limitation:** While theoretically elegant, $G_{\sigma}(x)$ is non-sparse. Every expert receives a non-zero gating value for every token. Consequently, all $N$ experts must be evaluated, failing to achieve the conditional computation objective of reducing active step computation.
@@ -488,7 +586,9 @@ To introduce true sparsity while maintaining end-to-end differentiability via ba
 ### 2.2.1 The Mathematical Formulation
 Let $W_g \in \mathbb{R}^{d_{\text{model}} \times N}$ be the gating weight matrix, and $W_{\text{noise}} \in \mathbb{R}^{d_{\text{model}} \times N}$ be a secondary noise control weight matrix. For a token vector $x$, the raw logit scores before sparsification, denoted by $H(x) \in \mathbb{R}^N$, are computed as:
 
-$$H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right) \quad \text{(Eq. 3)}$$
+$$
+H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}\left((x \cdot W_{\text{noise}})_i\right) \quad \text{(Eq. 3)}
+$$
 
 where $\epsilon \sim \mathcal{N}(0, 1)$ is standard Gaussian noise sampled dynamically at each forward pass, and $\text{Softplus}(z) = \log(1 + e^z)$ acts as a differentiable constraint ensuring positive scaling of the noise term. 
 
@@ -501,7 +601,9 @@ $$\text{KeepTopK}(v, k)_i = \begin{cases}
 
 The final sparse gating vector $G(x)$ is obtained by applying the standard softmax function to this pruned logit representation:
 
-$$G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right) \quad \text{(Eq. 5)}$$
+$$
+G(x) = \text{Softmax}\left(\text{KeepTopK}(H(x), k)\right) \quad \text{(Eq. 5)}
+$$
 
 Because $\text{Softmax}(-\infty) = 0$, Eq. 5 guarantees that exactly $k$ experts receive non-zero weights for any token $x$. The standard configuration in large-scale models such as GShard ([Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668)) and Mixtral ([Jiang et al. 2024](https://arxiv.org/abs/2401.04088)) is $k=2$, which provides a balance between routing flexibility and computational budget.
 
@@ -529,7 +631,9 @@ Token Input (x)
 ### 2.2.2 Gradient Flow and Backpropagation
 The $\text{KeepTopK}$ operator introduces discontinuities in the routing space, which could theoretically disrupt backpropagation. However, for any token $x$, let $\mathcal{T}(x) \subset \{1, \dots, N\}$ be the active set of top-$k$ indices. For any $i \in \mathcal{T}(x)$, the derivative of the output $y$ with respect to the gating parameters $W_g$ is non-zero and propagates through the standard softmax Jacobian:
 
-$$\frac{\partial G(x)_i}{\partial W_g} = G(x)_i \left( \mathbb{1}_{\{i = j\}} - G(x)_j \right) \frac{\partial H(x)_j}{\partial W_g} \quad \text{for } j \in \mathcal{T}(x)$$
+$$
+\frac{\partial G(x)_i}{\partial W_g} = G(x)_i \left( \mathbb{1}_{\{i = j\}} - G(x)_j \right) \frac{\partial H(x)_j}{\partial W_g} \quad \text{for } j \in \mathcal{T}(x)
+$$
 
 Because the gradients are non-zero only for the active top-$k$ experts, the routing network learns to prioritize the specialized capabilities of specific experts based on the token representation. Additionally, the inputs to the gating network receive gradients backpropagated from the MoE layer, enabling joint representation learning between the standard layers and the routing parameters ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538)).
 
@@ -542,17 +646,25 @@ Because the gradients are non-zero only for the active top-$k$ experts, the rout
 ### 2.3.1 Gating Formulations and Mechanics
 In the Switch Transformer, the noisy gating mechanism is stripped of its noise terms to yield a deterministic, lightweight routing function:
 
-$$h(x) = W_r \cdot x \quad \text{(Eq. 6)}$$
+$$
+h(x) = W_r \cdot x \quad \text{(Eq. 6)}
+$$
 
-$$p_i(x) = \frac{e^{h(x)_i}}{\sum_{j=1}^N e^{h(x)_j}} \quad \text{(Eq. 7)}$$
+$$
+p_i(x) = \frac{e^{h(x)_i}}{\sum_{j=1}^N e^{h(x)_j}} \quad \text{(Eq. 7)}
+$$
 
 The token $x$ is dispatched solely to the single expert matching the argmax of the probability distribution:
 
-$$i^* = \text{argmax}_i \, p_i(x) \quad \text{(Eq. 8)}$$
+$$
+i^* = \text{argmax}_i \, p_i(x) \quad \text{(Eq. 8)}
+$$
 
 The gating coefficient used in the final scaling of the FFN output is $p_{i^*}(x)$, preserving the differentiability of the router:
 
-$$y = p_{i^*}(x) E_{i^*}(x) \quad \text{(Eq. 9)}$$
+$$
+y = p_{i^*}(x) E_{i^*}(x) \quad \text{(Eq. 9)}
+$$
 
 ### 2.3.2 Computational, System, and Communication Benefits of $k=1$
 The reduction from $k=2$ to $k=1$ introduces major structural improvements across several layers of the deep learning stack:
@@ -571,7 +683,9 @@ To perform efficient static compilation (mandatory on TPU hardware and highly op
 
 To bridge this gap, modern MoE frameworks use **Expert Capacity**, defining the maximum number of tokens that can be sent to an individual expert during a single forward pass. This capacity is parameterized by the **Capacity Factor ($C$)**:
 
-$$\text{Expert Capacity} = \left( \frac{\text{Total Tokens in Batch}}{N} \right) \times C \quad \text{(Eq. 10)}$$
+$$
+\text{Expert Capacity} = \left( \frac{\text{Total Tokens in Batch}}{N} \right) \times C \quad \text{(Eq. 10)}
+$$
 
 where $N$ is the number of experts.
 
@@ -585,7 +699,9 @@ With Capacity Factor C = 1.5       -> [▄][▄][▄][▄][▄][▄][ ][ ] -> Ac
 * **The $C < 1.0$ Regime:** Restricts the buffer size below the uniform distribution threshold (e.g., $C = 0.75$). This guarantees significant computational savings and high TPU execution speeds, but increases the probability of **Token Dropping**.
 * **Token Dropping Mechanics:** If the number of tokens routed to an expert exceeds its static `Expert Capacity`, the excess tokens are flagged as overflow. These dropped tokens bypass the expert FFN computational block entirely and are passed directly to the next layer through the residual connection (identity mapping):
   
-  $$y_{\text{dropped}} = x$$
+$$
+y_{\text{dropped}} = x
+$$
 
   While [Zoph et al. (2022)](https://arxiv.org/abs/2202.08906) showed that downstream performance is surprisingly robust to token dropping rates of up to 10-15% during fine-tuning, severe token dropping during pre-training hinders semantic learning and degrades downstream model quality.
 
@@ -595,7 +711,9 @@ To implement Top-2 routing at scale without experiencing sequential bottlenecks,
 1. **Local Group Partitioning:** To maintain constant compiler graph size and parallel execution independent of batch scaling, the total training batch of $N_{\text{tokens}}$ is split evenly into $G$ groups of size $S = N_{\text{tokens}} / G$. Gating and dispatching are computed locally within each group in parallel.
 2. **Group-Level Capacity Constraint:** Each expert is allocated a fractional capacity within each group:
    
-   $$\text{Group Expert Capacity } (C_{\text{group}}) = \frac{2 \cdot S}{N} \times \text{Capacity Factor}$$
+$$
+\text{Group Expert Capacity } (C_{\text{group}}) = \frac{2 \cdot S}{N} \times \text{Capacity Factor}
+$$
 
 3. **Stochastic Second-Best Routing:** For a token $x$, if the gate values of the top-2 experts are $g_1$ and $g_2$ respectively:
    * The top-1 expert gate is normalized: $g_1' = \frac{g_1}{g_1+g_2}$. The token is assigned to $e_1$ if the expert's group buffer is not full ($c_{e_1} < C_{\text{group}}$).
@@ -609,43 +727,63 @@ This method employs a dual-loss objective consisting of an importance-weighting 
 
 1. **Importance Loss:** Defined as the square of the coefficient of variation ($CV^2$) of the batch-wise sum of the gate values:
    
-   $$\text{Importance}(X) = \sum_{x \in X} G(x) \quad \text{(Eq. 11)}$$
+$$
+\text{Importance}(X) = \sum_{x \in X} G(x) \quad \text{(Eq. 11)}
+$$
    
-   $$\mathcal{L}_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}(\text{Importance}(X))^2 \quad \text{(Eq. 12)}$$
+$$
+\mathcal{L}_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}(\text{Importance}(X))^2 \quad \text{(Eq. 12)}
+$$
 
 2. **Load Loss:** To optimize the actual discrete load, a smooth probability estimator $P(x, i)$ is formulated, representing the probability that $H(x)_i$ is in the top $k$ components given noise variations:
    
-   $$P(x, i) = \Phi\left( \frac{(x \cdot W_g)_i - \text{kth\_excluding}(H(x), k, i)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right) \quad \text{(Eq. 13)}$$
+$$
+P(x, i) = \Phi\left( \frac{(x \cdot W_g)_i - \text{kth\_excluding}(H(x), k, i)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right) \quad \text{(Eq. 13)}
+$$
    
    where $\text{kth\_excluding}(v, k, i)$ denotes the $k$-th highest component of vector $v$ excluding index $i$.
    
-   $$\text{Load}(X)_i = \sum_{x \in X} P(x, i) \quad \text{(Eq. 14)}$$
+$$
+\text{Load}(X)_i = \sum_{x \in X} P(x, i) \quad \text{(Eq. 14)}
+$$
    
-   $$\mathcal{L}_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}(\text{Load}(X))^2 \quad \text{(Eq. 15)}$$
+$$
+\mathcal{L}_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}(\text{Load}(X))^2 \quad \text{(Eq. 15)}
+$$
 
 The coefficient of variation $\text{CV}(v)$ for a vector $v \in \mathbb{R}^d$ is defined as the ratio of the standard deviation to the mean:
 
-$$\text{CV}(v) = \frac{\sigma(v)}{\mu(v)} = \frac{\sqrt{\frac{1}{d}\sum_{j=1}^d (v_j - \bar{v})^2}}{\frac{1}{d}\sum_{j=1}^d v_j}$$
+$$
+\text{CV}(v) = \frac{\sigma(v)}{\mu(v)} = \frac{\sqrt{\frac{1}{d}\sum_{j=1}^d (v_j - \bar{v})^2}}{\frac{1}{d}\sum_{j=1}^d v_j}
+$$
 
 #### 2.4.3.2 B. GShard Auxiliary Loss
 GShard simplifies the load-balancing objective into a single loss term that couples the differentiable mean gate probability $m_e$ with the non-differentiable group-dispatch fraction:
 
-$$\mathcal{L}_{\text{aux}} = \frac{1}{N} \sum_{e=1}^N \left( \frac{c_e}{S} \cdot m_e \right) \quad \text{(Eq. 16)}$$
+$$
+\mathcal{L}_{\text{aux}} = \frac{1}{N} \sum_{e=1}^N \left( \frac{c_e}{S} \cdot m_e \right) \quad \text{(Eq. 16)}
+$$
 
 where $c_e$ is the final token dispatch count for expert $e$ (treated as a constant during backpropagation), and $m_e = \frac{1}{S} \sum_{s=1}^S g_{s, e}$ is the mean gate probability across the group.
 
 #### 2.4.3.3 C. Switch Transformer Simplified Balancing Loss
 Switch Transformers adapt the GShard load balancing loss to top-1 routing, scaling the scaled dot product between the fraction of tokens dispatched ($f$) and the average routing probability ($P$):
 
-$$\mathcal{L}_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i \quad \text{(Eq. 17)}$$
+$$
+\mathcal{L}_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i \quad \text{(Eq. 17)}
+$$
 
 where $f_i$ is the exact fraction of tokens routed to expert $i$:
 
-$$f_i = \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}} \quad \text{(Eq. 18)}$$
+$$
+f_i = \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}} \quad \text{(Eq. 18)}
+$$
 
 and $P_i$ is the average gating probability allocated to expert $i$:
 
-$$P_i = \frac{1}{T} \sum_{x \in B} p_i(x) \quad \text{(Eq. 19)}$$
+$$
+P_i = \frac{1}{T} \sum_{x \in B} p_i(x) \quad \text{(Eq. 19)}
+$$
 
 Setting $\alpha = 10^{-2}$ provides strong load balancing without degrading the primary cross-entropy objective ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)).
 
@@ -683,11 +821,15 @@ To bypass the issues of token dropping and routing imbalance, [Zhou et al. (2022
 #### 2.5.4.1 The Formulation
 Given $n$ input tokens $X \in \mathbb{R}^{n \times d_{\text{model}}}$, a gating projection $W_g \in \mathbb{R}^{d_{\text{model}} \times E}$ produces a token-to-expert affinity matrix $S$:
 
-$$S = \text{Softmax}(X \cdot W_g), \quad S \in \mathbb{R}^{n \times E} \quad \text{(Eq. 20)}$$
+$$
+S = \text{Softmax}(X \cdot W_g), \quad S \in \mathbb{R}^{n \times E} \quad \text{(Eq. 20)}
+$$
 
 Each expert $i$ is allocated a fixed bucket capacity $k = \frac{n \cdot C}{E}$, where $C$ is the capacity factor. The routing matrices are computed by executing the $\text{TopK}$ operator along the token dimension of the transposed affinity matrix $S^T$:
 
-$$G, I = \text{TopK}(S^T, k), \quad G \in \mathbb{R}^{E \times k}, \, I \in \mathbb{R}^{E \times k} \quad \text{(Eq. 21)}$$
+$$
+G, I = \text{TopK}(S^T, k), \quad G \in \mathbb{R}^{E \times k}, \, I \in \mathbb{R}^{E \times k} \quad \text{(Eq. 21)}
+$$
 
 where $I[i, j]$ denotes the index of the $j$-th selected token for expert $i$, and $G[i, j]$ is its routing weight.
 
@@ -709,7 +851,9 @@ To stabilize massive sparse models (e.g., ST-MoE-269B) without sacrificing execu
 1. **Selective Precision:** The gating logits and softmax probabilities are cast and computed locally in high-precision `float32`. Once the sparse routing indices and weights are resolved, they are cast back to `bfloat16` for cross-device `All-to-All` communication, avoiding bandwidth overhead ([Fedus et al. 2021](https://arxiv.org/abs/2101.03961)).
 2. **Router Z-Loss:** To prevent logits from drifting into high numerical ranges where roundoff errors dominate, [Zoph et al. (2022)](https://arxiv.org/abs/2202.08906) introduced the **Router Z-Loss** as an auxiliary regularization term:
    
-   $$\mathcal{L}_z(x) = \frac{1}{B} \sum_{i=1}^B \left( \log \sum_{j=1}^N e^{x_i^{(j)}} \right)^2 \quad \text{(Eq. 22)}$$
+$$
+\mathcal{L}_z(x) = \frac{1}{B} \sum_{i=1}^B \left( \log \sum_{j=1}^N e^{x_i^{(j)}} \right)^2 \quad \text{(Eq. 22)}
+$$
    
    where $B$ is the number of tokens, $N$ is the number of experts, and $x \in \mathbb{R}^{B \times N}$ are the input logits. By penalizing the squared log-sum-exp of the router logits, the model is penalized for producing excessively large logits, keeping routing numbers in accurate ranges and preventing numerical divergence during scale-up.
 
@@ -794,16 +938,22 @@ Let the input representations to the MoE layer be denoted by a matrix $X \in \ma
 
 ### 3.2.1 Capacity Determination
 The expert capacity $k$, representing the exact number of tokens that each expert must select, is defined as:
-$$k = \left\lceil \frac{n \times c}{e} \right\rceil \tag{1}$$
+$$
+k = \left\lceil \frac{n \times c}{e} \right\rceil \tag{1}
+$$
 
 ### 3.2.2 Affinity Score Computation
 The token-to-expert affinity matrix $S \in \mathbb{R}^{n \times e}$ is computed via a gating projection matrix $W_g \in \mathbb{R}^{d \times e}$ followed by a softmax activation over the expert dimension:
-$$S = \text{Softmax}(X \cdot W_g) \tag{2}$$
+$$
+S = \text{Softmax}(X \cdot W_g) \tag{2}
+$$
 Each element $S[l, i]$ represents the affinity score of token $l$ for expert $i$.
 
 ### 3.2.3 Column-Wise Top-K Routing
 Unlike token-choice models that perform a row-wise $\text{TopK}$ on $S$ (selecting the best experts for each token), Expert-Choice Routing transposes $S$ to obtain $S^\top \in \mathbb{R}^{e \times n}$ and performs a row-wise $\text{TopK}$ operation on the transposed matrix. This is equivalent to performing a **column-wise $\text{TopK}$ over the token dimension of the original affinity matrix $S$**:
-$$G, I = \text{TopK}(S^\top, k) \tag{3}$$
+$$
+G, I = \text{TopK}(S^\top, k) \tag{3}
+$$
 - **Index Matrix ($I \in \mathbb{R}^{e \times k}$)**: $I[i, j]$ specifies the absolute token index $l \in \{1, \dots, n\}$ selected as the $j$-th token for expert $i$.
 - **Gating Matrix ($G \in \mathbb{R}^{e \times k}$)**: $G[i, j]$ denotes the gating weight (affinity score) of expert $i$ for its $j$-th selected token.
 
@@ -816,18 +966,26 @@ $$P[i, j, l] = \begin{cases}
 
 ### 3.2.5 Dispatch / Permutation Operation
 Using the permutation tensor $P$, the input token representations $X$ are gathered and permuted into the expert input tensor $X_{in} \in \mathbb{R}^{e \times k \times d}$, where $X_{in}[i] \in \mathbb{R}^{k \times d}$ is the input matrix for expert $i$:
-$$X_{in} = P \cdot X \tag{5}$$
+$$
+X_{in} = P \cdot X \tag{5}
+$$
 In tensor index notation, this gather operation is represented as:
-$$X_{in}[i, j, m] = \sum_{l=1}^{n} P[i, j, l] X[l, m] \tag{6}$$
+$$
+X_{in}[i, j, m] = \sum_{l=1}^{n} P[i, j, l] X[l, m] \tag{6}
+$$
 
 ### 3.2.6 Expert Computation
 Let $W_1[i] \in \mathbb{R}^{d \times d_{ff}}$ and $W_2[i] \in \mathbb{R}^{d \times d_{ff}}$ represent the weight parameters of the feed-forward sub-network for expert $i$. The intermediate expert activation $X_e[i] \in \mathbb{R}^{k \times d}$ is computed using the $\text{GeLU}$ activation function:
-$$X_e[i] = \text{GeLU}(X_{in}[i] \cdot W_1[i]) \cdot W_2[i]^\top \tag{7}$$
+$$
+X_e[i] = \text{GeLU}(X_{in}[i] \cdot W_1[i]) \cdot W_2[i]^\top \tag{7}
+$$
 *(Note: To maximize model quality, modern implementations can substitute the standard FFN with a Gated Linear Unit, such as SwiGLU).*
 
 ### 3.2.7 Combine / Scatter Operation
 The final output of the MoE layer, $X_{out} \in \mathbb{R}^{n \times d}$, is reconstructed by scattering the expert outputs back to their original token positions, scaled by their respective gating values in $G$. This is computed via the following Einstein summation (einsum) formulation:
-$$X_{out}[l, m] = \sum_{i=1}^{e} \sum_{j=1}^{k} P[i, j, l] G[i, j] X_e[i, j, m] \tag{8}$$
+$$
+X_{out}[l, m] = \sum_{i=1}^{e} \sum_{j=1}^{k} P[i, j, l] G[i, j] X_e[i, j, m] \tag{8}
+$$
 
 ---
 
@@ -874,15 +1032,23 @@ A potential issue with vanilla ECR is that a small fraction of highly influentia
 ### 3.4.1 Optimization Formulation
 This routing restriction is formulated as an **entropy-regularized linear programming problem**. Let $A \in \mathbb{R}^{e \times n}$ be the continuous assignment matrix, where $A[i, j] \in [0, 1]$ represents the affinity score/routing probability of routing expert $i$ to token $j$. The objective is to find an optimal assignment $A$ that maximizes token-expert affinity while respecting both expert and token capacity constraints:
 
-$$\max_{A} \sum_{i=1}^e \sum_{j=1}^n S^\top[i, j] A[i, j] + \lambda H(A) \tag{9}$$
+$$
+\max_{A} \sum_{i=1}^e \sum_{j=1}^n S^\top[i, j] A[i, j] + \lambda H(A) \tag{9}
+$$
 
 Subject to the constraints:
 1. **Expert Capacity Constraint**: Each expert must receive exactly $k$ tokens:
-   $$\sum_{j=1}^n A[i, j] = k \quad \forall i \in \{1, \dots, e\} \tag{10}$$
+$$
+\sum_{j=1}^n A[i, j] = k \quad \forall i \in \{1, \dots, e\} \tag{10}
+$$
 2. **Token Capacity Cap**: No token can be selected by more than $b$ experts:
-   $$\sum_{i=1}^e A[i, j] \leq b \quad \forall j \in \{1, \dots, n\} \tag{11}$$
+$$
+\sum_{i=1}^e A[i, j] \leq b \quad \forall j \in \{1, \dots, n\} \tag{11}
+$$
 3. **Bound Constraints**:
-   $$0 \leq A[i, j] \leq 1 \quad \forall i, j \tag{12}$$
+$$
+0 \leq A[i, j] \leq 1 \quad \forall i, j \tag{12}
+$$
 
 Here, $H(A) = -\sum_{i, j} A[i, j] \log A[i, j]$ is the element-wise Shannon entropy of the routing matrix, and $\lambda > 0$ is a regularization parameter (set to $0.001$). The addition of the entropy term serves two purposes:
 - It guarantees that the objective function is strictly concave, ensuring a unique global maximum.
@@ -890,7 +1056,9 @@ Here, $H(A) = -\sum_{i, j} A[i, j] \log A[i, j]$ is the element-wise Shannon ent
 
 ### 3.4.2 Dykstra’s Projection Algorithm
 To solve this optimization problem during the forward pass, [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) employ **Dykstra's Projection Algorithm** [Dykstra 1985](https://arxiv.org/abs/2202.09368). The solution space is defined as the intersection of three convex constraint sets:
-$$\mathcal{C}_1 = \left\{ A \;\middle|\; \forall i, \sum_{j} A[i, j] = k \right\}, \quad \mathcal{C}_2 = \left\{ A \;\middle|\; \forall j, \sum_{i} A[i, j] \leq b \right\}, \quad \mathcal{C}_3 = \{ A \;|\; 0 \leq A[i, j] \leq 1 \}$$
+$$
+\mathcal{C}_1 = \left\{ A \;\middle|\; \forall i, \sum_{j} A[i, j] = k \right\}, \quad \mathcal{C}_2 = \left\{ A \;\middle|\; \forall j, \sum_{i} A[i, j] \leq b \right\}, \quad \mathcal{C}_3 = \{ A \;|\; 0 \leq A[i, j] \leq 1 \}
+$$
 
 The algorithm iteratively projects the intermediate matrix onto each of these sets sequentially:
 1. **Projection onto $\mathcal{C}_1$**: Scaling the rows of the exponentiated matrix to sum to $k$.
@@ -898,7 +1066,9 @@ The algorithm iteratively projects the intermediate matrix onto each of these se
 3. **Projection onto $\mathcal{C}_3$**: Clipping values to $[0, 1]$.
 
 Using $\lambda = 0.001$, the projection converges to a high-precision near-integer solution within **100 iterations**, which is executed fast and efficiently on TPU hardware. Once the optimal continuous assignment matrix $A$ is computed, the discrete routing indices $I$ are extracted using a standard $\text{TopK}$ operation:
-$$I = \text{TopK}(A, k) \tag{13}$$
+$$
+I = \text{TopK}(A, k) \tag{13}
+$$
 
 ---
 
@@ -1073,29 +1243,45 @@ To learn the routing, we introduce a parameter tensor $\Phi \in \mathbb{R}^{d \t
 
 #### 4.2.1.1 Step 1: Logit Generation
 First, we compute the compatibility score (logits) between every token $i$ and slot $j$:
-$$S = X \Phi \in \mathbb{R}^{m \times (n \cdot p)}$$
+$$
+S = X \Phi \in \mathbb{R}^{m \times (n \cdot p)}
+$$
 
 #### 4.2.1.2 Step 2: Slot Dispatching
 To construct the inputs for each slot, we perform a softmax normalization over the columns of $S$ (over the input tokens $m$ for each slot $j$). This produces the **dispatch weights** $D \in \mathbb{R}^{m \times (n \cdot p)}$:
-$$D_{ij} = \frac{\exp(S_{ij})}{\sum_{i'=1}^m \exp(S_{i'j})}$$
+$$
+D_{ij} = \frac{\exp(S_{ij})}{\sum_{i'=1}^m \exp(S_{i'j})}
+$$
 
 The input for slot $j$, denoted as $\tilde{X}_j \in \mathbb{R}^d$, is computed as a convex combination of all input tokens weighted by $D_{*, j}$:
-$$\tilde{X} = D^\top X \in \mathbb{R}^{(n \cdot p) \times d}$$
-$$\tilde{X}_j = \sum_{i=1}^m D_{ij} X_i$$
+$$
+\tilde{X} = D^\top X \in \mathbb{R}^{(n \cdot p) \times d}
+$$
+$$
+\tilde{X}_j = \sum_{i=1}^m D_{ij} X_i
+$$
 
 Because $\sum_{i=1}^m D_{ij} = 1$, each slot is guaranteed to receive a normalized, stable combination of the input sequence.
 
 #### 4.2.1.3 Step 3: Expert Processing
 Each slot input is processed by its corresponding expert. If expert functions are mapped round-robin or in contiguous blocks, the output slots $\tilde{Y} \in \mathbb{R}^{(n \cdot p) \times d}$ are computed as:
-$$\tilde{Y}_j = f_{\lfloor j/p \rfloor}(\tilde{X}_j) \quad \text{for } j \in [0, n \cdot p - 1]$$
+$$
+\tilde{Y}_j = f_{\lfloor j/p \rfloor}(\tilde{X}_j) \quad \text{for } j \in [0, n \cdot p - 1]
+$$
 
 #### 4.2.1.4 Step 4: Token Combination
 To reconstruct the original sequence shape, the output tokens $Y \in \mathbb{R}^{m \times d}$ are generated by mixing the processed output slots $\tilde{Y}$. The mixing weights are determined by normalizing the logits $S$ over the rows (over all $n \cdot p$ slots for each token $i$). This yields the **combine weights** $C \in \mathbb{R}^{m \times (n \cdot p)}$:
-$$C_{ij} = \frac{\exp(S_{ij})}{\sum_{j'=1}^{n \cdot p} \exp(S_{ij'})}$$
+$$
+C_{ij} = \frac{\exp(S_{ij})}{\sum_{j'=1}^{n \cdot p} \exp(S_{ij'})}
+$$
 
 The final output token $Y_i \in \mathbb{R}^d$ is computed as:
-$$Y = C \tilde{Y} \in \mathbb{R}^{m \times d}$$
-$$Y_i = \sum_{j=1}^{n \cdot p} C_{ij} \tilde{Y}_j$$
+$$
+Y = C \tilde{Y} \in \mathbb{R}^{m \times d}
+$$
+$$
+Y_i = \sum_{j=1}^{n \cdot p} C_{ij} \tilde{Y}_j
+$$
 
 Since $\sum_{j=1}^{n \cdot p} C_{ij} = 1$, each output token is reconstructed as a convex combination of the expert outputs.
 
@@ -1118,7 +1304,9 @@ The core innovation of Soft MoE is its absolute continuity. Because the dispatch
 
 ### 4.3.2 Backpropagation Mechanics
 The gradient of the loss $\mathcal{L}$ with respect to the slot parameters $\Phi$ is computed directly using the chain rule:
-$$\frac{\partial \mathcal{L}}{\partial \Phi} = \frac{\partial \mathcal{L}}{\partial D} \frac{\partial D}{\partial S} \frac{\partial S}{\partial \Phi} + \frac{\partial \mathcal{L}}{\partial C} \frac{\partial C}{\partial S} \frac{\partial S}{\partial \Phi}$$
+$$
+\frac{\partial \mathcal{L}}{\partial \Phi} = \frac{\partial \mathcal{L}}{\partial D} \frac{\partial D}{\partial S} \frac{\partial S}{\partial \Phi} + \frac{\partial \mathcal{L}}{\partial C} \frac{\partial C}{\partial S} \frac{\partial S}{\partial \Phi}
+$$
 
 This mathematical continuity allows the routing parameters $\Phi$ to receive strong, direct gradient signals during training, enabling the network to learn smooth routing topologies and align expert specialization with token-semantic templates.
 
@@ -1131,35 +1319,55 @@ Modern Transformers employ Pre-LayerNorm configurations where layer inputs are n
 ### 4.4.1 Mathematical Proof of Softmax Collapse
 
 Let $x \in \mathbb{R}^d$ be a token representation entering the routing block. The Layer Normalization output $\text{LN}(x)$ is defined as:
-$$\text{LN}(x)_k = \alpha_k \frac{x_k - \mu(x)}{\sigma(x)} + \beta_k$$
+$$
+\text{LN}(x)_k = \alpha_k \frac{x_k - \mu(x)}{\sigma(x)} + \beta_k
+$$
 where $\mu(x) = \frac{1}{d} \sum_{i=1}^d x_i$ and $\sigma(x) = \sqrt{\frac{1}{d} \sum_{i=1}^d (x_i - \mu(x))^2}$.
 
 We can express this centered vector as $\tilde{x} = x - \mu(x)$ and its unit-norm counterpart as $\hat{x} = \tilde{x}/\|\tilde{x}\|_2$. Since the standard deviation is related to the L2-norm by $\sigma(x) = \frac{\|\tilde{x}\|_2}{\sqrt{d}}$, we rewrite LayerNorm as:
-$$\text{LN}(x)_k = \sqrt{d} \alpha_k \hat{x}_k + \beta_k$$
+$$
+\text{LN}(x)_k = \sqrt{d} \alpha_k \hat{x}_k + \beta_k
+$$
 
 Now, consider applying the softmax gating projection using parameter matrix $\Theta \in \mathbb{R}^{n \times d}$:
-$$\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp \left( \sum_{k=1}^d \theta_{ik} \text{LN}(x)_k \right)}{\sum_{j=1}^n \exp \left( \sum_{k=1}^d \theta_{jk} \text{LN}(x)_k \right)}$$
+$$
+\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp \left( \sum_{k=1}^d \theta_{ik} \text{LN}(x)_k \right)}{\sum_{j=1}^n \exp \left( \sum_{k=1}^d \theta_{jk} \text{LN}(x)_k \right)}
+$$
 
 Substituting the expression for LayerNorm:
-$$\sum_{k=1}^d \theta_{ik} \text{LN}(x)_k = \sum_{k=1}^d \theta_{ik} (\sqrt{d} \alpha_k \hat{x}_k + \beta_k) = \sqrt{d} \sum_{k=1}^d \theta_{ik} \alpha_k \hat{x}_k + \sum_{k=1}^d \theta_{ik} \beta_k$$
+$$
+\sum_{k=1}^d \theta_{ik} \text{LN}(x)_k = \sum_{k=1}^d \theta_{ik} (\sqrt{d} \alpha_k \hat{x}_k + \beta_k) = \sqrt{d} \sum_{k=1}^d \theta_{ik} \alpha_k \hat{x}_k + \sum_{k=1}^d \theta_{ik} \beta_k
+$$
 
 Let us define:
-$$\vartheta_i = \sum_{k=1}^d \theta_{ik} \alpha_k \hat{x}_k \quad , \quad \delta_i = \sum_{k=1}^d \theta_{ik} \beta_k$$
+$$
+\vartheta_i = \sum_{k=1}^d \theta_{ik} \alpha_k \hat{x}_k \quad , \quad \delta_i = \sum_{k=1}^d \theta_{ik} \beta_k
+$$
 
 Substituting these back into the softmax equation yields:
-$$\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp(\sqrt{d} \vartheta_i + \delta_i)}{\sum_{j=1}^n \exp(\sqrt{d} \vartheta_j + \delta_j)}$$
+$$
+\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp(\sqrt{d} \vartheta_i + \delta_i)}{\sum_{j=1}^n \exp(\sqrt{d} \vartheta_j + \delta_j)}
+$$
 
 Now, define $m = \max_{j \in [n]} (\sqrt{d} \vartheta_j + \delta_j)$, and let $M$ be the set of indices that achieve this maximum:
-$$M = \{ i \in [n] : \sqrt{d} \vartheta_i + \delta_i = m \}$$
+$$
+M = \{ i \in [n] : \sqrt{d} \vartheta_i + \delta_i = m \}
+$$
 
 Dividing the numerator and denominator by $\exp(m)$:
-$$\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp(\sqrt{d} \vartheta_i + \delta_i - m)}{\sum_{j=1}^n \exp(\sqrt{d} \vartheta_j + \delta_j - m)}$$
+$$
+\text{softmax}(\Theta \text{LN}(x))_i = \frac{\exp(\sqrt{d} \vartheta_i + \delta_i - m)}{\sum_{j=1}^n \exp(\sqrt{d} \vartheta_j + \delta_j - m)}
+$$
 
 As the model dimension $d \to \infty$:
-$$\lim_{d \to \infty} \exp(\sqrt{d} \vartheta_i + \delta_i - m) = \begin{cases} 1 & \text{if } i \in M \\ 0 & \text{if } i \notin M \end{cases}$$
+$$
+\lim_{d \to \infty} \exp(\sqrt{d} \vartheta_i + \delta_i - m) = \begin{cases} 1 & \text{if } i \in M \\ 0 & \text{if } i \notin M \end{cases}
+$$
 
 Therefore, the limit of the softmax output is:
-$$\lim_{d \to \infty} \text{softmax}(\Theta \text{LN}(x))_i = \begin{cases} \frac{1}{|M|} & \text{if } i \in M \\ 0 & \text{if } i \notin M \end{cases}$$
+$$
+\lim_{d \to \infty} \text{softmax}(\Theta \text{LN}(x))_i = \begin{cases} \frac{1}{|M|} & \text{if } i \in M \\ 0 & \text{if } i \notin M \end{cases}
+$$
 
 If the maximum is unique ($|M| = 1$), the softmax output collapses to a **one-hot vector**.
 
@@ -1170,11 +1378,17 @@ In standard models, this collapse turns the continuous Soft MoE router into a di
 To prevent the scaling factor $\sqrt{d}$ from saturating the softmax, Soft MoE normalizes both the input tokens $X$ and the slot parameters $\Phi$ before computing the scores. 
 
 For a sequence matrix $X \in \mathbb{R}^{m \times d}$ and slot parameters $\Phi \in \mathbb{R}^{d \times (n \cdot p)}$:
-$$\bar{X}_{i,:} = \frac{X_{i,:}}{\| X_{i,:} \|_2 + \epsilon}$$
-$$\bar{\Phi}_{:,j} = \gamma \cdot \frac{\Phi_{:,j}}{\| \Phi_{:,j} \|_2 + \epsilon}$$
+$$
+\bar{X}_{i,:} = \frac{X_{i,:}}{\| X_{i,:} \|_2 + \epsilon}
+$$
+$$
+\bar{\Phi}_{:,j} = \gamma \cdot \frac{\Phi_{:,j}}{\| \Phi_{:,j} \|_2 + \epsilon}
+$$
 
 where $\gamma$ is a learnable scalar scale parameter. The logits $S$ are then computed as:
-$$S = \bar{X} \bar{\Phi}$$
+$$
+S = \bar{X} \bar{\Phi}
+$$
 
 Because both inputs and parameters are mapped to unit L2-spheres, their dot product is strictly bounded in $[-1, 1]$ before scaling by $\gamma$. This breaks the mathematical dependence of the softmax input magnitude on the dimension $d$, completely preventing softmax collapse and allowing stable training of massive networks with high learning rates.
 
@@ -1255,7 +1469,9 @@ Assuming the cost of applying a single expert function on a token of dimension $
 * **Soft MoE Expert Compute Cost**: Applying the expert MLPs on all slots has a complexity of $O(n \cdot p \cdot k) = O(N_{\text{slots}} \cdot k)$.
 
 If we set the total number of slots $N_{\text{slots}} = m$ (equal to the sequence length, matching the compute cost of a standard dense Transformer), and choose $p = m/n$ slots per expert, the complexity reduces to:
-$$\text{Complexity}_{\text{layer}} = O(m^2 d + m k)$$
+$$
+\text{Complexity}_{\text{layer}} = O(m^2 d + m k)
+$$
 
 In deep models, the expert MLP cost $mk$ dominates the routing cost $m^2d$. Thus, a Soft MoE block matches the FLOP count of a dense block, while scaling the parameters to billions of parameters across hundreds of experts.
 
@@ -1299,7 +1515,9 @@ A critical hyperparameter in Soft MoE is the number of slots per expert, $p$. In
 
 ### 4.8.2 Slot Parameter Alignment Proof
 To understand this behavior, [Puigcerver et al. 2023](https://arxiv.org/abs/2308.00951) analyzed the slot correlation matrix by taking the inner product between each pair of (normalized) slot parameters:
-$$R_{ij} = \frac{\Phi_{:,i}^\top \Phi_{:,j}}{\|\Phi_{:,i}\|_2 \|\Phi_{:,j}\|_2}$$
+$$
+R_{ij} = \frac{\Phi_{:,i}^\top \Phi_{:,j}}{\|\Phi_{:,i}\|_2 \|\Phi_{:,j}\|_2}
+$$
 
 ```
 Slot Correlation Matrix R when p > 1:
@@ -1334,7 +1552,9 @@ While Soft MoE demonstrates exceptional performance in encoder-only and vision-f
 ### 4.9.1 Autoregressive Decoding Compatibility
 Soft MoE requires mixing *all* tokens in the sequence to compute the dispatch and combine weights. In autoregressive decoders (e.g., causal language models), a token at position $t$ must not attend to or depend on any future token $t' > t$ to preserve causality.
 
-$$\text{Causal Soft MoE Requirement: } D_{it} = 0 \quad \text{for all } i > t$$
+$$
+\text{Causal Soft MoE Requirement: } D_{it} = 0 \quad \text{for all } i > t
+$$
 
 Applying causal masking directly to the routing logits $S$ introduces index-dependent constraints:
 * **Slot Bias**: Since different slots are computed over varying sequence subsets, slots will learn to bias their parameters based on token indices rather than semantic content.
@@ -1345,8 +1565,12 @@ Designing causal-safe, unbiased continuous routing remains an active research di
 ### 4.9.2 Memory vs. FLOP Asymmetry
 To scale the parameters of a Soft MoE layer, one must scale the number of experts $n$ (since $p=1$ is optimal). 
 
-$$\text{Total Parameters} \propto n \cdot d_{\text{mlp}}$$
-$$\text{Inference FLOPs} \propto m \cdot d_{\text{mlp}}$$
+$$
+\text{Total Parameters} \propto n \cdot d_{\text{mlp}}
+$$
+$$
+\text{Inference FLOPs} \propto m \cdot d_{\text{mlp}}
+$$
 
 While the computational cost (FLOPs) remains bounded and equivalent to a dense model, the memory footprint scales linearly with $n$. For instance, **Soft MoE H/14 with 256 experts** utilizes **54.1 billion parameters** but runs at the computational cost of a dense **669 million parameter** model. 
 
@@ -1418,7 +1642,9 @@ graph TD
 ### 5.1.3 Mathematical Formulation
 Let $\mathbf{u}_t \in \mathbb{R}^d$ be the input hidden state of the $t$-th token at a given Transformer layer. The output of the DeepSeekMoE FFN layer, denoted by $\mathbf{h}'_t \in \mathbb{R}^d$, is formulated as:
 
-$$\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j,t} \text{FFN}_j^{(r)}(\mathbf{u}_t)$$
+$$
+\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j,t} \text{FFN}_j^{(r)}(\mathbf{u}_t)
+$$
 
 where:
 * $\text{FFN}_i^{(s)}(\cdot)$ is the $i$-th shared expert.
@@ -1428,11 +1654,15 @@ where:
 #### 5.1.3.1 Gating Mechanics:
 Let $s_{j,t}$ denote the token-to-expert affinity score for the $j$-th routed expert. In DeepSeek-V2 ([DeepSeek-V2 2024](https://arxiv.org/abs/2405.04434)), the affinity is computed using a softmax over the projection centroids:
 
-$$s_{j,t} = \text{Softmax}_j\left(\mathbf{u}_t^T \mathbf{e}_j\right) = \frac{\exp\left(\mathbf{u}_t^T \mathbf{e}_j\right)}{\sum_{m=1}^{N_r} \exp\left(\mathbf{u}_t^T \mathbf{e}_m\right)}$$
+$$
+s_{j,t} = \text{Softmax}_j\left(\mathbf{u}_t^T \mathbf{e}_j\right) = \frac{\exp\left(\mathbf{u}_t^T \mathbf{e}_j\right)}{\sum_{m=1}^{N_r} \exp\left(\mathbf{u}_t^T \mathbf{e}_m\right)}
+$$
 
 where $\mathbf{e}_j \in \mathbb{R}^d$ is the centroid embedding vector of the $j$-th routed expert. The top-$K_r$ active gate values are then given by:
 
-$$g_{j,t} = \begin{cases} s_{j,t}, & s_{j,t} \in \text{Topk}\left(\{s_{m,t} \mid 1 \le m \le N_r\}, K_r\right) \\ 0, & \text{otherwise} \end{cases}$$
+$$
+g_{j,t} = \begin{cases} s_{j,t}, & s_{j,t} \in \text{Topk}\left(\{s_{m,t} \mid 1 \le m \le N_r\}, K_r\right) \\ 0, & \text{otherwise} \end{cases}
+$$
 
 ### 5.1.4 Fine-Grained Expert Segmentation Parameters
 DeepSeekMoE achieves superior representation capacity by segmenting standard experts into a much finer granularity. Under a constant computational budget (i.e., keeping the number of active parameters per token constant), the expert intermediate hidden dimension $D_{FFN}$ is scaled down by a factor $m$, and the total number of specialized experts is scaled up by $m$. 
@@ -1464,7 +1694,9 @@ A foundational question in deep learning theory is: **Why does the shared expert
 ### 5.2.1 Mixture of Experts Conditional Density under Softmax Gating
 Let $(X_1, Y_1), \dots, (X_n, Y_n) \in \mathbb{R}^d \times \mathbb{R}$ be $i.i.d.$ samples generated from a Gaussian DeepSeekMoE conditional density $f_{G_1^*, G_2^*}(y|x)$ defined as:
 
-$$f_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\exp\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \exp\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)$$
+$$
+f_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\exp\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \exp\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)
+$$
 
 where:
 * $\pi(y \mid \mu, \nu)$ is the Gaussian density with mean $\mu$ and variance $\nu$.
@@ -1474,11 +1706,15 @@ where:
 
 The Maximum Likelihood Estimator (MLE) $(\hat{G}_n^1, \hat{G}_n^2)$ is obtained over the parameter space $\mathcal{G}_{k_1, k_2}(\Theta)$ where the number of fitted experts is over-specified (i.e., $k_1 > k_1^*$ and $k_2 > k_2^*$):
 
-$$(\hat{G}_n^1, \hat{G}_n^2) = \arg\max_{(G_1, G_2) \in \mathcal{G}_{k_1, k_2}} \frac{1}{n} \sum_{i=1}^n \log f_{G_1, G_2}(Y_i \mid X_i)$$
+$$
+(\hat{G}_n^1, \hat{G}_n^2) = \arg\max_{(G_1, G_2) \in \mathcal{G}_{k_1, k_2}} \frac{1}{n} \sum_{i=1}^n \log f_{G_1, G_2}(Y_i \mid X_i)
+$$
 
 Under mild universal compactness and boundedness assumptions, the MLE density $f_{\hat{G}_n^1, \hat{G}_n^2}$ converges to the true density $f_{G_1^*, G_2^*}$ in Total Variation (TV) distance at the standard nearly parametric rate:
 
-$$\mathbb{E}_X\left[ V\left(f_{\hat{G}_n^1, \hat{G}_n^2}(\cdot \mid X), f_{G_1^*, G_2^*}(\cdot \mid X)\right) \right] = \tilde{O}_P\left(n^{-1/2}\right)$$
+$$
+\mathbb{E}_X\left[ V\left(f_{\hat{G}_n^1, \hat{G}_n^2}(\cdot \mid X), f_{G_1^*, G_2^*}(\cdot \mid X)\right) \right] = \tilde{O}_P\left(n^{-1/2}\right)
+$$
 
 However, the rate at which the *underlying parameters* $(\hat{\kappa}_n, \hat{\eta}_n)$ of individual experts converge depends heavily on the expert functions and the gating mechanism.
 
@@ -1494,14 +1730,18 @@ To characterize the convergence of expert parameters, the expert functions must 
 #### 5.2.2.1 Strongly Identifiable Experts:
 Two-layer feed-forward networks (FFNs) of the form:
 
-$$h(x, (\theta_2, \theta_1, \theta_0)) = \theta_2 \cdot \text{GELU}\left(\theta_1^T x + \theta_0\right)$$
+$$
+h(x, (\theta_2, \theta_1, \theta_0)) = \theta_2 \cdot \text{GELU}\left(\theta_1^T x + \theta_0\right)
+$$
 
 are strongly identifiable. This property also holds for other non-linear activations like $\text{sigmoid}$ and $\text{tanh}$.
 
 #### 5.2.2.2 Non-Identifiable Experts (Failure of Linear Experts):
 In contrast, standard **linear experts** $h_1(x, (\kappa_1, \kappa_0)) = \kappa_1^T x + \kappa_0$ **fail** to satisfy the strong identifiability condition. This is because their partial derivatives exhibit strict partial differential equation (PDE) relationships:
 
-$$\frac{\partial h_1}{\partial \kappa_0} \cdot \frac{\partial h_1}{\partial \kappa_0} = 1 \quad \text{and} \quad \frac{\partial h_2}{\partial \eta_1} = x \frac{\partial h_2}{\partial \eta_0}$$
+$$
+\frac{\partial h_1}{\partial \kappa_0} \cdot \frac{\partial h_1}{\partial \kappa_0} = 1 \quad \text{and} \quad \frac{\partial h_2}{\partial \eta_1} = x \frac{\partial h_2}{\partial \eta_0}
+$$
 
 These PDEs introduce severe linear dependencies, causing strong parameter interactions that degrade parameter convergence rates.
 
@@ -1509,26 +1749,40 @@ These PDEs introduce severe linear dependencies, causing strong parameter intera
 To analyze parameter convergence under over-specification (where multiple fitted experts map to a single true expert), [Nguyen et al. 2026](https://arxiv.org/abs/2401.06066) utilized the framework of Voronoi cells. For any fitted measure $G$, the atoms are grouped into Voronoi cells $V_{1,j}$ and $V_{2,j}$ centered around the true expert parameters.
 
 #### 5.2.3.1 Voronoi Loss $D_1$ (For Strongly Identifiable Experts):
-$$D_1\left((G_1, G_2), (G_1^*, G_2^*)\right) := \sum_{j=1}^{k_1^*} \left| \sum_{i \in V_{1,j}} \omega_i - \omega_j^* \right| + \sum_{j=1}^{k_2^*} \left| \sum_{i \in V_{2,j}} \exp(\beta_{0i}) - \exp(\beta_{0j}^*) \right|$$
+$$
+D_1\left((G_1, G_2), (G_1^*, G_2^*)\right) := \sum_{j=1}^{k_1^*} \left| \sum_{i \in V_{1,j}} \omega_i - \omega_j^* \right| + \sum_{j=1}^{k_2^*} \left| \sum_{i \in V_{2,j}} \exp(\beta_{0i}) - \exp(\beta_{0j}^*) \right|
+$$
 
-$$+ \sum_{j: |V_{1,j}|=1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\| + |\Delta \tau_{ij}| \right) + \sum_{j: |V_{2,j}|=1} \sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\| + \|\Delta \eta_{ij}\| + |\Delta \nu_{ij}| \right)$$
+$$
++ \sum_{j: |V_{1,j}|=1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\| + |\Delta \tau_{ij}| \right) + \sum_{j: |V_{2,j}|=1} \sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\| + \|\Delta \eta_{ij}\| + |\Delta \nu_{ij}| \right)
+$$
 
-$$+ \sum_{j: |V_{1,j}|>1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\|^2 + |\Delta \tau_{ij}\|^2 \right) + \sum_{j: |V_{2,j}|>1} \sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\|^2 + \|\Delta \eta_{ij}\|^2 + |\Delta \nu_{ij}\|^2 \right)$$
+$$
++ \sum_{j: |V_{1,j}|>1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\|^2 + |\Delta \tau_{ij}\|^2 \right) + \sum_{j: |V_{2,j}|>1} \sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\|^2 + \|\Delta \eta_{ij}\|^2 + |\Delta \nu_{ij}\|^2 \right)
+$$
 
 where $\Delta \theta_{ij} = \theta_i - \theta_j^*$.
 
 Under strongly identifiable expert functions, the lower bound $\mathbb{E}_X[V(f_{G_1, G_2}, f_{G_1^*, G_2^*})] \gtrsim D_1((G_1, G_2), (G_1^*, G_2^*))$ holds, yielding the following convergence rates:
 
-$$\text{Shared/Routed Experts (Exactly-Specified, } |V|=1\text{): } \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$$
+$$
+\text{Shared/Routed Experts (Exactly-Specified, } |V|=1\text{): } \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}
+$$
 
-$$\text{Shared/Routed Experts (Over-Specified, } |V|>1\text{): } \mathbf{\tilde{O}_P\left(n^{-1/4}\right)}$$
+$$
+\text{Shared/Routed Experts (Over-Specified, } |V|>1\text{): } \mathbf{\tilde{O}_P\left(n^{-1/4}\right)}
+$$
 
 #### 5.2.3.2 Voronoi Loss $D_2$ (For Linear Experts):
 Due to the PDE relationships of linear experts, the parameter interactions require a modified loss $D_2$ which incorporates higher-order powers of the parameter differences:
 
-$$\sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{1ij}\|^2 + |\Delta \kappa_{0ij}|^{r_1,j} + |\Delta \tau_{ij}|^{r_1,j/2} \right)$$
+$$
+\sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{1ij}\|^2 + |\Delta \kappa_{0ij}|^{r_1,j} + |\Delta \tau_{ij}|^{r_1,j/2} \right)
+$$
 
-$$\sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\|^{r_2,j} + \|\Delta \eta_{1ij}\|^{r_2,j/2} + |\Delta \eta_{0ij}|^{r_2,j} + |\Delta \nu_{ij}\|^{r_2,j/2} \right)$$
+$$
+\sum_{i \in V_{2,j}} \exp(\beta_{0i}) \left( \|\Delta \beta_{1ij}\|^{r_2,j} + \|\Delta \eta_{1ij}\|^{r_2,j/2} + |\Delta \eta_{0ij}|^{r_2,j} + |\Delta \nu_{ij}\|^{r_2,j/2} \right)
+$$
 
 Here, $r_1,j = r_1(|V_{1,j}|)$ and $r_2,j = r_2(|V_{2,j}|)$ represent the minimum degree of solvability for systems of polynomial equations. Specifically:
 * For $|V|=2$, $r_2 = 4$.
@@ -1537,9 +1791,13 @@ Here, $r_1,j = r_1(|V_{1,j}|)$ and $r_2,j = r_2(|V_{2,j}|)$ represent the minimu
 
 This yields the following convergence rates for over-specified linear experts:
 
-$$\text{Linear Shared Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_1,j}\right)} \ge \mathbf{\tilde{O}_P\left(n^{-1/4}\right)} \quad (\text{since } |V_{1,j}| = 2 \implies r_1=4)$$
+$$
+\text{Linear Shared Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_1,j}\right)} \ge \mathbf{\tilde{O}_P\left(n^{-1/4}\right)} \quad (\text{since } |V_{1,j}| = 2 \implies r_1=4)
+$$
 
-$$\text{Linear Routed Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_2,j}\right)} = \mathbf{\tilde{O}_P\left(n^{-1/12}\right)} \quad (\text{for } |V_{2,j}| = 3)$$
+$$
+\text{Linear Routed Experts: } \mathbf{\tilde{O}_P\left(n^{-1/2r_2,j}\right)} = \mathbf{\tilde{O}_P\left(n^{-1/12}\right)} \quad (\text{for } |V_{2,j}| = 3)
+$$
 
 ### 5.2.4 Statistical Benefits of the Shared Expert Strategy
 The mathematical analysis reveals a profound statistical rationale for isolating shared experts:
@@ -1548,11 +1806,15 @@ The mathematical analysis reveals a profound statistical rationale for isolating
 2. **Avoiding the Polynomial Complexity Trap**: In standard MoE models without shared experts, *all* experts are subjected to dynamic routing. This results in heavy over-specification ($|V| \ge 3$), which collapses the parameter convergence rate of routed experts to $\tilde{O}_P\left(n^{-1/12}\right)$ under linear expert representations.
 3. **Data Complexity Reduction**: To estimate a shared expert within an approximation error of $\epsilon > 0$, the sample complexity is:
 
-   $$N_{\text{samples}}^{\text{shared}} = \mathcal{O}\left(\epsilon^{-4}\right)$$
+$$
+N_{\text{samples}}^{\text{shared}} = \mathcal{O}\left(\epsilon^{-4}\right)
+$$
 
    In contrast, a dynamically routed expert in standard MoE requires:
 
-   $$N_{\text{samples}}^{\text{standard}} = \mathcal{O}\left(\epsilon^{-r_2}\right) = \mathbf{\mathcal{O}\left(\epsilon^{-12}\right)} \quad (\text{for } |V|=3)$$
+$$
+N_{\text{samples}}^{\text{standard}} = \mathcal{O}\left(\epsilon^{-r_2}\right) = \mathbf{\mathcal{O}\left(\epsilon^{-12}\right)} \quad (\text{for } |V|=3)
+$$
 
 **The Punchline**: Shared experts require **orders of magnitude less data** to reach the same level of statistical estimation accuracy. By dedicating fixed parameters to capture common representations, the model rapidly stabilizes the shared base, allowing specialized routed experts to specialize more efficiently.
 
@@ -1565,18 +1827,24 @@ While DeepSeek-V2 utilized standard softmax gating, DeepSeek-V3 introduced **Nor
 ### 5.3.1 Gating Mechanics in DeepSeek-V3
 Under normalized sigmoid gating, the conditional density $g_{G_1^*, G_2^*}(y|x)$ is formulated as:
 
-$$g_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\sigma\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)$$
+$$
+g_{G_1^*, G_2^*}(y|x) = \frac{1}{2} \sum_{i=1}^{k_1^*} \omega_i^* \pi(y \mid h_1(x, \kappa_i^*), \tau_i^*) + \frac{1}{2} \sum_{i=1}^{k_2^*} \frac{\sigma\left((\beta_{1i}^*)^T x + \beta_{0i}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \pi(y \mid h_2(x, \eta_i^*), \nu_i^*)
+$$
 
 where $\sigma(z) = \frac{1}{1 + \exp(-z)}$ is the sigmoid function, and $G_2^* = \sum_{i=1}^{k_2^*} \sigma(\beta_{0i}^*) \delta(\beta_{1i}^*, \eta_i^*, \nu_i^*)$.
 
 ### 5.3.2 Sparse vs. Dense Regimes under Over-Specification
 Under over-specification ($k_2 > k_2^*$), multiple fitted experts converge to a single true specialized expert. The sum of their dynamic gate weights must converge to the true expert's gate weight:
 
-$$\sum_{i \in V_{2,1}} \frac{\sigma\left((\hat{\beta}_{1i}^n)^T x + \hat{\beta}_{0i}^n\right)}{\sum_{j=1}^{k_2} \sigma\left((\hat{\beta}_{1j}^n)^T x + \hat{\beta}_{0j}^n\right)} \longrightarrow \frac{\sigma\left((\beta_{11}^*)^T x + \beta_{01}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \quad \text{a.e. } x$$
+$$
+\sum_{i \in V_{2,1}} \frac{\sigma\left((\hat{\beta}_{1i}^n)^T x + \hat{\beta}_{0i}^n\right)}{\sum_{j=1}^{k_2} \sigma\left((\hat{\beta}_{1j}^n)^T x + \hat{\beta}_{0j}^n\right)} \longrightarrow \frac{\sigma\left((\beta_{11}^*)^T x + \beta_{01}^*\right)}{\sum_{j=1}^{k_2^*} \sigma\left((\beta_{1j}^*)^T x + \beta_{0j}^*\right)} \quad \text{a.e. } x
+$$
 
 Because the sigmoid function does not sum to 1 naturally, this asymptotic convergence forces the denominator to converge, implying:
 
-$$\sum_{i \in V_{2,1}} \sigma\left((\hat{\beta}_{1i}^n)^T x + \hat{\beta}_{0i}^n\right) \longrightarrow \sigma\left((\beta_{11}^*)^T x + \beta_{01}^*\right) \quad \text{a.e. } x$$
+$$
+\sum_{i \in V_{2,1}} \sigma\left((\hat{\beta}_{1i}^n)^T x + \hat{\beta}_{0i}^n\right) \longrightarrow \sigma\left((\beta_{11}^*)^T x + \beta_{01}^*\right) \quad \text{a.e. } x
+$$
 
 This constraint can only be solved easily if the over-specified gating parameters $\beta_{1i}^*$ are static. This leads to two highly distinct mathematical regimes:
 1. **Sparse Regime**: All over-specified gating parameters $\beta_{1i}^*$ equal the zero vector ($\mathbf{0}_d$). The gating weights become static (input-independent).
@@ -1589,7 +1857,9 @@ This constraint can only be solved easily if the over-specified gating parameter
 In the realistic **dense regime**, the dynamic convergence equation cannot be strictly satisfied under over-specification. As a result, the ground-truth model is **misspecified**. 
 Rather than converging to the true mixing measure $G_2^*$, the MLE converges to a misspecified parameter set $\check{G}_2 \in \mathcal{G}_{k_2}(\Theta_2) \setminus \mathcal{G}_{k_2^*}(\Theta_2)$ that minimizes the Kullback-Leibler (KL) divergence to the ground-truth:
 
-$$\check{G}_2 = \arg\min_{G_2} \text{KL}\left(g_{G_1^*, G_2^*} \ \Big\|\ g_{G_1^*, G_2}\right)$$
+$$
+\check{G}_2 = \arg\min_{G_2} \text{KL}\left(g_{G_1^*, G_2^*} \ \Big\|\ g_{G_1^*, G_2}\right)
+$$
 
 Importantly, because $\check{G}_2$ lies in the boundary of the over-specified space, the atoms of $\check{G}_2$ represent **distinct, well-separated parameters** $(\check{\beta}_{1j}, \check{\beta}_{0j}, \check{\eta}_j, \check{\nu}_j)$.
 
@@ -1607,17 +1877,25 @@ Because the misspecified target parameters in $\check{G}_2$ are distinct and wel
 
 The corresponding Voronoi loss $D_4$ for the dense regime is defined as:
 
-$$D_4\left((G_1, G_2), (G_1^*, \check{G}_2)\right) := \sum_{j=1}^{k_1^*} \left| \sum_{i \in V_{1,j}} \omega_i - \omega_j^* \right| + \sum_{j: |V_{1,j}|=1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\| + |\Delta \tau_{ij}| \right)$$
+$$
+D_4\left((G_1, G_2), (G_1^*, \check{G}_2)\right) := \sum_{j=1}^{k_1^*} \left| \sum_{i \in V_{1,j}} \omega_i - \omega_j^* \right| + \sum_{j: |V_{1,j}|=1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\| + |\Delta \tau_{ij}| \right)
+$$
 
-$$+ \sum_{j: |V_{1,j}|>1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\|^2 + |\Delta \tau_{ij}\|^2 \right) + \sum_{j=1}^{k_2^*} \sum_{i \in V_{2,j}} \left( \|\beta_{1i} - \check{\beta}_{1j}\| + |\beta_{0i} - \check{\beta}_{0j}| + \|\eta_i - \check{\eta}_j\| + |\nu_i - \check{\nu}_j| \right)$$
+$$
++ \sum_{j: |V_{1,j}|>1} \sum_{i \in V_{1,j}} \omega_i \left( \|\Delta \kappa_{ij}\|^2 + |\Delta \tau_{ij}\|^2 \right) + \sum_{j=1}^{k_2^*} \sum_{i \in V_{2,j}} \left( \|\beta_{1i} - \check{\beta}_{1j}\| + |\beta_{0i} - \check{\beta}_{0j}| + \|\eta_i - \check{\eta}_j\| + |\nu_i - \check{\nu}_j| \right)
+$$
 
 Notice that **all routed expert parameter terms in $D_4$ are strictly first-order (linear)**. There are no squared or higher-order terms for over-specified routed experts!
 
 This yields a spectacular convergence rate (Theorem 4 of Nguyen et al. 2026):
 
-$$\text{Shared Experts (Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/4}\right)}$$
+$$
+\text{Shared Experts (Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/4}\right)}
+$$
 
-$$\text{Routed Experts (Exactly or Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$$
+$$
+\text{Routed Experts (Exactly or Over-Specified): } \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}
+$$
 
 ### 5.3.6 Explaining the Parametric Leap: Softmax vs. Sigmoid Gating
 The theoretical comparison of expert estimation rates highlights the profound sample efficiency gains of normalized sigmoid gating:
@@ -1659,7 +1937,9 @@ The four configurations—**Vanilla SMoE**, **DeepSeek-V2** (Shared + Softmax), 
 ### 5.4.3 Router Saturation
 **Router Saturation** measures the proportion of expert routing decisions that have converged to their final state at an intermediate checkpoint $t$ relative to the final checkpoint $T$:
 
-$$\text{Router Saturation}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t) \cap E_i(T) \right|}{K_r}$$
+$$
+\text{Router Saturation}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t) \cap E_i(T) \right|}{K_r}
+$$
 
 where $E_i(t)$ is the set of active experts for the $i$-th token at checkpoint $t$.
 
@@ -1670,7 +1950,9 @@ where $E_i(t)$ is the set of active experts for the $i$-th token at checkpoint $
 ### 5.4.4 Router Change Rate
 To measure routing volatility, the **Router Change Rate** calculates the fraction of active experts that fluctuate between consecutive checkpoints $t$ and $t+1$:
 
-$$\text{Router Change Rate}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t+1) \setminus E_i(t) \right|}{K_r}$$
+$$
+\text{Router Change Rate}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t+1) \setminus E_i(t) \right|}{K_r}
+$$
 
 #### 5.4.4.1 Key Findings:
 * **Volatily Suppression**: Models using normalized sigmoid gating exhibit a **significantly lower change rate** throughout training. This suppresses the "routing fluctuation" problem, ensuring that specialized experts receive a stable stream of similar tokens, which is crucial for deep parameter specialization.
@@ -1679,7 +1961,9 @@ $$\text{Router Change Rate}(t) = \frac{1}{N} \sum_{i=1}^N \frac{\left| E_i(t+1) 
 ### 5.4.5 Expert Utilization (Jain's Fairness Index)
 To measure the load-balance and determine if any experts are under-utilized or collapsing, **Jain's Fairness Index** is applied to the expert utilization vector $\mathbf{R} = (r_1, \dots, r_{N_r})$:
 
-$$J(\mathbf{R}) = \frac{\left( \sum_{i=1}^{N_r} r_i \right)^2}{N_r \sum_{i=1}^{N_r} r_i^2}$$
+$$
+J(\mathbf{R}) = \frac{\left( \sum_{i=1}^{N_r} r_i \right)^2}{N_r \sum_{i=1}^{N_r} r_i^2}
+$$
 
 where $r_i$ is the proportion of total tokens routed to expert $i$. $J(\mathbf{R}) \in [1/N_r, 1]$, where $1$ represents perfectly uniform utilization.
 
@@ -1706,15 +1990,21 @@ To maintain high hardware utilization and prevent routing collapse, DeepSeek-V2 
 
 1. **Expert-Level Balance Loss ($L_{\text{ExpBal}}$)**: Mitigates the risk of individual expert collapse:
 
-   $$L_{\text{ExpBal}} = \alpha_1 \sum_{i=1}^{N_r} f_i P_i \quad \text{where} \quad f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbb{I}(\text{Token } t \text{ selects Expert } i), \quad P_i = \frac{1}{T} \sum_{t=1}^T s_{i,t}$$
+$$
+L_{\text{ExpBal}} = \alpha_1 \sum_{i=1}^{N_r} f_i P_i \quad \text{where} \quad f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbb{I}(\text{Token } t \text{ selects Expert } i), \quad P_i = \frac{1}{T} \sum_{t=1}^T s_{i,t}
+$$
 
 2. **Device-Level Balance Loss ($L_{\text{DevBal}}$)**: Ensures balanced computational loads across the $D$ devices. Specialized experts are partitioned into $D$ groups $\{\mathcal{E}_1, \dots, \mathcal{E}_D\}$, each group deployed on a single device:
 
-   $$L_{\text{DevBal}} = \alpha_2 \sum_{i=1}^D f'_i P'_i \quad \text{where} \quad f'_i = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j, \quad P'_i = \sum_{j \in \mathcal{E}_i} P_j$$
+$$
+L_{\text{DevBal}} = \alpha_2 \sum_{i=1}^D f'_i P'_i \quad \text{where} \quad f'_i = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j, \quad P'_i = \sum_{j \in \mathcal{E}_i} P_j
+$$
 
 3. **Communication Balance Loss ($L_{\text{CommBal}}$)**: Ensures that the volume of received tokens is balanced across devices, preventing network congestion:
 
-   $$L_{\text{CommBal}} = \alpha_3 \sum_{i=1}^D f''_i P''_i \quad \text{where} \quad f''_i = \frac{D}{M T} \sum_{t=1}^T \mathbb{I}(\text{Token } t \text{ is sent to Device } i), \quad P''_i = \sum_{j \in \mathcal{E}_i} P_j$$
+$$
+L_{\text{CommBal}} = \alpha_3 \sum_{i=1}^D f''_i P''_i \quad \text{where} \quad f''_i = \frac{D}{M T} \sum_{t=1}^T \mathbb{I}(\text{Token } t \text{ is sent to Device } i), \quad P''_i = \sum_{j \in \mathcal{E}_i} P_j
+$$
 
 During pretraining, these balance coefficients are set to $\alpha_1 = 0.003$, $\alpha_2 = 0.05$, and $\alpha_3 = 0.02$.
 
@@ -1811,26 +2101,38 @@ In their seminal work, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) p
 #### 6.1.1.1 Mathematical Formulation of Noisy Top-K Gating
 Before applying the softmax activation, tunable Gaussian noise is added to the gating logits. Only the top $k$ values are retained; all other components are set to $-\infty$, zeroing out the corresponding gate values after normalization:
 
-$$H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}((x \cdot W_{\text{noise}})_i)$$
+$$
+H(x)_i = (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}((x \cdot W_{\text{noise}})_i)
+$$
 
-$$G(x) = \text{Softmax}\left(\text{KeepTopK}\left(H(x), k\right)\right)$$
+$$
+G(x) = \text{Softmax}\left(\text{KeepTopK}\left(H(x), k\right)\right)
+$$
 
-$$\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the top } k \text{ elements of } v \\ -\infty & \text{otherwise} \end{cases}$$
+$$
+\text{KeepTopK}(v, k)_i = \begin{cases} v_i & \text{if } v_i \text{ is in the top } k \text{ elements of } v \\ -\infty & \text{otherwise} \end{cases}
+$$
 
 where $\epsilon \sim \mathcal{N}(0, 1)$ is standard normal noise generated at each forward step.
 
 #### 6.1.1.2 The Importance Loss ($L_{\text{importance}}$)
 The "importance" of an expert $i$ over a batch of input representations $X$ is defined as the sum of its gate values across the batch:
 
-$$\text{Importance}(X) = \sum_{x \in X} G(x)$$
+$$
+\text{Importance}(X) = \sum_{x \in X} G(x)
+$$
 
 To encourage equal importance across all $N$ experts, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) defined $L_{\text{importance}}$ as the square of the **Coefficient of Variation (CV)** of the importance vector:
 
-$$L_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}\left(\text{Importance}(X)\right)^2$$
+$$
+L_{\text{importance}}(X) = w_{\text{importance}} \cdot \text{CV}\left(\text{Importance}(X)\right)^2
+$$
 
 where the squared Coefficient of Variation is calculated as:
 
-$$\text{CV}(v)^2 = \frac{\text{Var}(v)}{\mu(v)^2} = \frac{\frac{1}{N} \sum_{i=1}^N (v_i - \bar{v})^2}{\bar{v}^2} = \frac{N \sum_{i=1}^N v_i^2}{\left(\sum_{i=1}^N v_i\right)^2} - 1$$
+$$
+\text{CV}(v)^2 = \frac{\text{Var}(v)}{\mu(v)^2} = \frac{\frac{1}{N} \sum_{i=1}^N (v_i - \bar{v})^2}{\bar{v}^2} = \frac{N \sum_{i=1}^N v_i^2}{\left(\sum_{i=1}^N v_i\right)^2} - 1
+$$
 
 This loss is minimized (yielding $0$) when all experts receive exactly equal average gating scores across the batch ($\text{Importance}(X)_i = \bar{v}$ for all $i$).
 
@@ -1841,19 +2143,27 @@ To solve this, [Shazeer et al. 2017](https://arxiv.org/abs/1701.06538) introduce
 
 Let $\text{kth\_excluding}(v, k, i)$ denote the $k$-th highest component of the vector $v$, excluding component $i$. The $i$-th component of the gating input $H(x)_i$ is in the top $k$ elements if and only if it is strictly greater than $\text{kth\_excluding}(H(x), k, i)$. The probability of this event, conditioned on the already-sampled choices of noise on all other elements, simplifies to:
 
-$$P(x, i) = \mathbb{P}\left( (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}((x \cdot W_{\text{noise}})_i) > \text{kth\_excluding}\left(H(x), k, i\right) \right)$$
+$$
+P(x, i) = \mathbb{P}\left( (x \cdot W_g)_i + \epsilon \cdot \text{Softplus}((x \cdot W_{\text{noise}})_i) > \text{kth\_excluding}\left(H(x), k, i\right) \right)
+$$
 
 By using the Cumulative Distribution Function (CDF) of the standard normal distribution, denoted as $\Phi(z) = \frac{1}{\sqrt{2\pi}} \int_{-\infty}^{z} e^{-t^2/2} dt$, this probability is written in analytical, differentiable form:
 
-$$P(x, i) = \Phi\left( \frac{(x \cdot W_g)_i - \text{kth\_excluding}\left(H(x), k, i\right)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right)$$
+$$
+P(x, i) = \Phi\left( \frac{(x \cdot W_g)_i - \text{kth\_excluding}\left(H(x), k, i\right)}{\text{Softplus}\left((x \cdot W_{\text{noise}})_i\right)} \right)
+$$
 
 The smooth load estimator for the batch $X$ is then defined as:
 
-$$\text{Load}(X)_i = \sum_{x \in X} P(x, i)$$
+$$
+\text{Load}(X)_i = \sum_{x \in X} P(x, i)
+$$
 
 The load loss is the squared coefficient of variation of this load vector:
 
-$$L_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2$$
+$$
+L_{\text{load}}(X) = w_{\text{load}} \cdot \text{CV}\left(\text{Load}(X)\right)^2
+$$
 
 ### 6.1.2 Lepikhin et al. 2020 (GShard): Group-Level Top-2 Gating and the stop_gradient Trick
 
@@ -1900,11 +2210,15 @@ Since the discrete dispatching counts $c_e$ (the number of times expert $e$ is c
 
 Let $m_e$ represent the average routing probability assigned to expert $e$ across the group of tokens:
 
-$$m_e = \frac{1}{S} \sum_{s=1}^S g_{s,e}$$
+$$
+m_e = \frac{1}{S} \sum_{s=1}^S g_{s,e}
+$$
 
 The auxiliary loss is formulated as:
 
-$$\ell_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \left(\text{sg}\left[\frac{c_e}{S}\right] \cdot m_e\right)$$
+$$
+\ell_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \left(\text{sg}\left[\frac{c_e}{S}\right] \cdot m_e\right)
+$$
 
 where $\text{sg}[\cdot]$ denotes the `stop_gradient` operator. Minimizing this product forces the differentiable probability mass $m_e$ to follow the empirical load distribution. If an expert receives a large fraction of tokens ($\frac{c_e}{S}$ is high), its gating probability $m_e$ is penalized heavily, shifting routing probability to other, under-utilized experts.
 
@@ -1914,27 +2228,37 @@ where $\text{sg}[\cdot]$ denotes the `stop_gradient` operator. Minimizing this p
 
 To ensure uniform load balance across $N$ experts in the Switch layer, they simplified the GShard auxiliary loss into a unified, scale-invariant objective. For a batch $B$ consisting of $T$ tokens, the auxiliary loss is defined as:
 
-$$L_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i$$
+$$
+L_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N f_i \cdot P_i
+$$
 
 where:
 - $f_i$ is the empirical fraction of tokens dispatched to expert $i$:
 
-$$f_i = \text{sg}\left[ \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}} \right]$$
+$$
+f_i = \text{sg}\left[ \frac{1}{T} \sum_{x \in B} \mathbb{1}_{\{\text{argmax } p(x) = i\}} \right]
+$$
 
 - $P_i$ is the fraction of total routing probability allocated to expert $i$:
 
-$$P_i = \frac{1}{T} \sum_{x \in B} p_i(x)$$
+$$
+P_i = \frac{1}{T} \sum_{x \in B} p_i(x)
+$$
 
 - $\alpha$ is a scaling hyperparameter (empirically set to $10^{-2}$ or $0.01$).
 
 #### 6.1.3.1 Mathematical Proof of Scale Invariance
 Under perfect routing balance, all experts receive exactly the same number of tokens, and the gating probabilities are uniform:
 
-$$f_i = \frac{1}{N} \quad \text{and} \quad P_i = \frac{1}{N} \quad \forall i \in \{1, \dots, N\}$$
+$$
+f_i = \frac{1}{N} \quad \text{and} \quad P_i = \frac{1}{N} \quad \forall i \in \{1, \dots, N\}
+$$
 
 Substituting these ideal values into the auxiliary loss equation yields:
 
-$$L_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N \left( \frac{1}{N} \cdot \frac{1}{N} \right) = \alpha \cdot N \cdot N \cdot \frac{1}{N^2} = \alpha$$
+$$
+L_{\text{aux}} = \alpha \cdot N \cdot \sum_{i=1}^N \left( \frac{1}{N} \cdot \frac{1}{N} \right) = \alpha \cdot N \cdot N \cdot \frac{1}{N^2} = \alpha
+$$
 
 By multiplying the dot-product $\sum f_i P_i$ by the expert count $N$, the loss scale remains invariant to changes in expert count. This ensures that the same hyperparameter value ($\alpha = 0.01$) works reliably across models scaling from a few experts to thousands of experts.
 
@@ -1948,7 +2272,9 @@ As models scale to hundreds of billions of parameters, training dynamics become 
 
 The routing decisions in sparse models rely heavily on exponentiation within the softmax function. In lower-precision formats like bfloat16, numerical roundoff errors are up to $65,536\times$ larger than in float32. When the routing logits $x \in \mathbb{R}^{B \times N}$ grow large, these roundoff errors are amplified exponentially.
 
-$$\text{Softmax}(x)_k = \frac{e^{x_k - x_{\max}}}{\sum_j e^{x_j - x_{\max}}}$$
+$$
+\text{Softmax}(x)_k = \frac{e^{x_k - x_{\max}}}{\sum_j e^{x_j - x_{\max}}}
+$$
 
 If the logits $x$ have large absolute magnitudes, minor perturbations due to bfloat16 roundoff errors drastically alter the resulting routing probabilities. This triggers discrete routing shifts, leading to token dropping and sudden loss spikes. 
 
@@ -1959,11 +2285,15 @@ To solve this, [Zoph et al. 2022 (ST-MoE)](https://arxiv.org/abs/2202.08906) int
 #### 6.2.2.1 Mathematical Formulation
 Given a batch of $B$ tokens, $N$ experts, and $x \in \mathbb{R}^{B \times N}$ representing the pre-softmax logits entering the gating network:
 
-$$L_z(x) = \frac{1}{B} \sum_{i=1}^B \left( \log \sum_{j=1}^N e^{x_{i,j}} \right)^2$$
+$$
+L_z(x) = \frac{1}{B} \sum_{i=1}^B \left( \log \sum_{j=1}^N e^{x_{i,j}} \right)^2
+$$
 
 This loss is added directly to the total training objective:
 
-$$L_{\text{total}} = L_{\text{CE}} + c_B L_B + c_z L_z$$
+$$
+L_{\text{total}} = L_{\text{CE}} + c_B L_B + c_z L_z
+$$
 
 where $L_{\text{CE}}$ is the cross-entropy loss, $L_B$ is the auxiliary load-balancing loss with coefficient $c_B$, and $L_z$ is the router z-loss with coefficient $c_z$ (empirically set to $10^{-3}$ or $0.001$).
 
@@ -1979,7 +2309,9 @@ To smooth the routing landscape and promote exploration of non-dominant experts 
 #### 6.2.3.1 Mechanism
 Input Jitter injects multiplicative uniform noise directly into the input representations before they enter the gating network. The input $x$ is modulated as follows:
 
-$$x_{\text{jitter}} = x \cdot U(1 - \epsilon, 1 + \epsilon)$$
+$$
+x_{\text{jitter}} = x \cdot U(1 - \epsilon, 1 + \epsilon)
+$$
 
 where $\epsilon$ is a noise scale hyperparameter (typically set to $10^{-2}$ or $10^{-1}$).
 
@@ -2090,13 +2422,17 @@ Maintaining healthy training runs at massive scale requires continuous monitorin
 2. **Expert Gating Entropy (Target: $\approx \ln(N)$)**
    - **Definition**: The Shannon entropy of the average routing distribution across experts:
 
-$$H_g = -\sum_{i=1}^N P_i \ln(P_i)$$
+$$
+H_g = -\sum_{i=1}^N P_i \ln(P_i)
+$$
 
    - **Diagnostic Value**: If $H_g$ drops significantly below the uniform entropy score $\ln(N)$ (e.g., $H_g \to 0$), the routing decisions have collapsed to a small subset of experts, signaling representation collapse.
 3. **Maximum Router Logit Magnitude (Target: $<10.0$)**
    - **Definition**: The maximum absolute value of the logits entering the softmax layer of the router:
 
-$$x_{\max} = \max_{i,j} |x_{i,j}|$$
+$$
+x_{\max} = \max_{i,j} |x_{i,j}|
+$$
 
    - **Diagnostic Value**: Logit magnitudes exceeding $10.0$ indicate that the router outputs are becoming overly confident, leading to vanishing gradients and numerical instability in bfloat16.
 4. **Coefficient of Variation of Expert Load (Target: $<0.1$)**
@@ -2111,7 +2447,9 @@ When training anomalies or loss divergences occur, the following interventions s
   - **Problem**: Standard weight initialization (e.g., $s=1.0$) yields large starting activation norms, causing routing logits to exceed numerical bounds and destabilize the softmax gradients early in training.
   - **Mitigation**: Scale down the standard deviation of the weight matrices initialization by a factor of 10:
 
-$$\sigma = 0.1 \times \sqrt{\frac{1}{n_{\text{in}}}}$$
+$$
+\sigma = 0.1 \times \sqrt{\frac{1}{n_{\text{in}}}}
+$$
 
   - This maintains stable activation scales throughout deep networks and prevents early training divergence.
 - **Tune the Load-Balancing Coefficient ($\alpha$)**
@@ -2170,15 +2508,21 @@ The original sparsely-gated Mixture-of-Experts formulation ([Shazeer et al. 2017
 
 For each token $x_s$, the gating network computes a sparse weight vector $G_{s}$ over the experts:
 
-$$G_{s} = \text{GATE}(x_s)$$
+$$
+G_{s} = \text{GATE}(x_s)
+$$
 
 Each expert $FFN_e(x)$ is a standard 2-layer Feed-Forward Network:
 
-$$FFN_e(x_s) = W_{o,e} \cdot \text{ReLU}(W_{i,e} \cdot x_s)$$
+$$
+FFN_e(x_s) = W_{o,e} \cdot \text{ReLU}(W_{i,e} \cdot x_s)
+$$
 
 The output of the MoE layer $y_s$ is the weighted sum of the activations returned by the selected experts:
 
-$$y_s = \sum_{e=1}^E G_{s,e} \cdot FFN_e(x_s)$$
+$$
+y_s = \sum_{e=1}^E G_{s,e} \cdot FFN_e(x_s)
+$$
 
 ### 7.1.2 Group-Level Top-2 Gating with Auxiliary Loss
 To scale efficiently to thousands of devices, a sequential gating mechanism is a massive bottleneck. GShard partitions the global training batch of $N$ tokens into $G$ physical groups, so that each group has exactly $S = N/G$ tokens. GShard's gating algorithm (Algorithm 1) runs independently and in parallel across all groups.
@@ -2194,7 +2538,9 @@ For a total batch of $N$ tokens and $E$ experts, each expert has an enforced cap
 
 At the group level, each group is allocated a fractional capacity $C$:
 
-$$C = \text{round}\left(m \cdot \frac{2N}{G \cdot E}\right) = O\left(\frac{S}{E}\right)$$
+$$
+C = \text{round}\left(m \cdot \frac{2N}{G \cdot E}\right) = O\left(\frac{S}{E}\right)
+$$
 
 where $m \ge 1.0$ is a capacity slack factor (typically $1.0$ to $1.5$) to accommodate local statistical variances in token routing distributions. GShard keeps a running counter $c_e$ of tokens dispatched to each expert $e$. If both the first and second-choice experts selected by a token have reached their capacity $C$, the token is designated as **overflown**. An overflown token bypasses the expert computation entirely; its representation $x_s$ is passed directly to the next layer through the residual connection, and its corresponding entry in $G_s$ is zeroed out.
 
@@ -2203,22 +2549,30 @@ Because the hard selection of experts (e.g., `top-2`) is a non-differentiable op
 
 The auxiliary loss is computed over a group of size $S$ and $E$ experts as:
 
-$$\ell_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \frac{c_e}{S} \cdot m_e$$
+$$
+\ell_{\text{aux}} = \frac{1}{E} \sum_{e=1}^E \frac{c_e}{S} \cdot m_e
+$$
 
 Where:
 * $c_e$ is the non-differentiable count of tokens in the group assigned to expert $e$ (specifically, $c_e = \sum_{s=1}^S \mathbb{I}(\text{expert } e \text{ is selected})$).
 * $m_e$ is the *differentiable* average gate probability for expert $e$ over the tokens in the group:
 
-$$m_e = \frac{1}{S} \sum_{s=1}^S g_{s,e}$$
+$$
+m_e = \frac{1}{S} \sum_{s=1}^S g_{s,e}
+$$
 
-$$g_{s} = \text{softmax}(W_g \cdot x_s)$$
+$$
+g_{s} = \text{softmax}(W_g \cdot x_s)
+$$
 
 By multiplying the constant, non-differentiable count fraction $\frac{c_e}{S}$ with the differentiable average probability $m_e$, the optimizer can compute gradients with respect to the routing weights $W_g$. Minima of this quadratic formulation are achieved when both $c_e$ and $m_e$ are uniformly distributed across all experts, driving the routing network towards a balanced state.
 
 #### 7.1.2.3 Random Routing
 To conserve expert capacity, GShard introduces a probabilistic element to the selection of the second-best expert. The first-best expert $e_1$ is selected deterministically based on the largest softmax gate weight $g_1$. However, the second-best expert $e_2$ (with weight $g_2$) is only selected with a probability proportional to its relative weight:
 
-$$P(\text{dispatch to } e_2) = \min(1.0, 2 \cdot g_2')$$
+$$
+P(\text{dispatch to } e_2) = \min(1.0, 2 \cdot g_2')
+$$
 
 where $g_2' = g_2 / (g_1 + g_2)$. If the second gate value is negligible, it is highly likely to be skipped, saving capacity for other tokens.
 
@@ -2282,11 +2636,15 @@ We compute the total floating-point operations (FLOPS) across the entire cluster
 
 Summing all terms, the total FLOPS across all devices is:
 
-$$\text{FLOPS}_{\text{total}} = O(D^2) + O(D) + O(D) + O(D) = O(D^2) + O(D)$$
+$$
+\text{FLOPS}_{\text{total}} = O(D^2) + O(D) + O(D) + O(D) = O(D^2) + O(D)
+$$
 
 To find the computational cost *per device*, we divide the total FLOPS by the device count $D$:
 
-$$\text{FLOPS}_{\text{per-device}} = \frac{O(D^2) + O(D)}{D} = O(D) + O(1)$$
+$$
+\text{FLOPS}_{\text{per-device}} = \frac{O(D^2) + O(D)}{D} = O(D) + O(1)
+$$
 
 The only term scaling with $D$ is the per-device softmax projection: $\text{FLOPS}_{\text{softmax\_per\_device}} = O(D)$. However, in practice, because $D \ll H$ and $D < S$, this linear cost is dominated by the huge constant matrices of the FFN and attention layers (represented by the $O(1)$ terms). Consequently, for all practical scaling regimes, the per-device computational cost remains virtually flat at $O(1)$, satisfying the sub-linear scaling requirements.
 
@@ -2398,7 +2756,9 @@ Since both operands are sharded on different dimensions, the compiler automatica
 #### 7.4.2.2 Accumulating Partial Results (All-Reduce)
 If an Einsum contracting dimension (the dimension being summed over, such as the inner dimension of a matrix multiplication) is sharded across devices, each device can only compute a partial, incomplete local sum:
 
-$$\text{Output}_{\text{local}} = \text{LHS}_{\text{partitioned}} \times \text{RHS}_{\text{partitioned}}$$
+$$
+\text{Output}_{\text{local}} = \text{LHS}_{\text{partitioned}} \times \text{RHS}_{\text{partitioned}}
+$$
 
 Recognizing this, the compiler automatically inserts an `AllReduce-Sum` collective immediately after the local multiplication to aggregate the partial results across the physical cluster and reconstruct the mathematically correct global tensor.
 
@@ -2428,7 +2788,9 @@ To support general neural workloads (like image models or convoluted token embed
 #### 7.4.3.1 Uneven Partitioning & Static Shapes
 XLA compiler operations require strictly static tensor shapes to run efficiently on TPUs. However, if a dimension $L$ is partitioned across $D$ devices and $L$ is not evenly divisible by $D$, the split sizes are irregular. The partitioner resolves this by rounding the local partition shape up to the nearest multiple of $D$:
 
-$$\text{Shape}_{\text{partition}} = \text{ceil}\left(\frac{L}{D}\right)$$
+$$
+\text{Shape}_{\text{partition}} = \text{ceil}\left(\frac{L}{D}\right)
+$$
 
 Any padding regions are filled with garbage data. To prevent this garbage data from corrupting numerical correctness during downstream reductions (such as `Reduce-Add`), the partitioner automatically generates mask tensors. It uses a combination of `Iota` operations, physical `PartitionId` offsets, and comparison predicates to dynamic-select the identity value (e.g., zero for addition) in the padded regions prior to executing collectives.
 
@@ -2456,7 +2818,9 @@ GShard resolves this through three compiler-driven strategies based on the mathe
 
 * **Case 1: Divisible Strides ($(\text{stride} \times \text{window\_count}) \bmod \text{dilation} = 0$):** All partitions share the identical spatial start offset. The partitioner runs halo exchanges on the raw, non-dilated base region, calculating the right halo index statically as:
 
-$$\text{Halo}_{\text{right}} = \frac{\text{stride} \times \text{window\_count} \times i + \text{window\_size} - \text{low\_pad} + \text{dilation} - 1}{\text{dilation}}$$
+$$
+\text{Halo}_{\text{right}} = \frac{\text{stride} \times \text{window\_count} \times i + \text{window\_size} - \text{low\_pad} + \text{dilation} - 1}{\text{dilation}}
+$$
 
 * **Case 2: Constant Stride of 1 with Indivisible Window Count:** The low padding shifts across partitions. Since padding is a static convolution property, XLA cannot specialize it per device. The compiler resolves this by enforcing the maximum global low padding on *all* devices. It executes the partitioned convolution on the padded bounds, and then dynamically slices the redundant offset elements from the output tensor.
 * **Case 3: Indivisible Strides ($\text{stride} \ne 1$ and Indivisible Window Count):** This is the most complex scenario, as naive padding would skip valid windows. The compiler solves this by padding both the base input area *and* the window itself. It applies a physical `Pad` and `DynamicSlice` directly to the window weights at runtime, shifting the window filter internally to align perfectly with the unaligned base data on each accelerator.
@@ -2476,25 +2840,35 @@ We prove why the communication cost of an `AllToAll` operation scales as $O(\sqr
 * The total data injected into the physical network fabric across the entire cluster is $d = D \cdot B$.
 * In a 2D grid network, the average coordinate distance (hop count $h$) that any individual data packet must travel from its source to its destination is:
 
-$$h = O(\sqrt{D})$$
+$$
+h = O(\sqrt{D})
+$$
 
 * The total number of bidirectional physical communication links $l$ connecting the accelerators in a 2D torus network scales linearly with the device count:
 
-$$l = O(D)$$
+$$
+l = O(D)
+$$
 
 #### 7.5.1.2 Bandwidth-Bound Execution Time ($t_{\text{bandwidth}}$):
 The execution time of a network transfer is determined by the total network load (total data transmitted multiplied by the average hop distance) divided by the total available network capacity (number of physical links multiplied by the physical link bandwidth):
 
-$$t_{\text{bandwidth}} \propto \frac{\text{Total Network Load}}{\text{Total Link Capacity}} = \frac{d \cdot h}{l} = \frac{O(D \cdot B) \cdot O(\sqrt{D})}{O(D)}$$
+$$
+t_{\text{bandwidth}} \propto \frac{\text{Total Network Load}}{\text{Total Link Capacity}} = \frac{d \cdot h}{l} = \frac{O(D \cdot B) \cdot O(\sqrt{D})}{O(D)}
+$$
 
 Since $B$ is a constant local buffer size:
 
-$$t_{\text{bandwidth}} = O\left(\frac{D \cdot \sqrt{D}}{D}\right) = O(\sqrt{D})$$
+$$
+t_{\text{bandwidth}} = O\left(\frac{D \cdot \sqrt{D}}{D}\right) = O(\sqrt{D})
+$$
 
 #### 7.5.1.3 Latency-Bound Execution Time ($t_{\text{latency}}$):
 In the latency-dominated regime (small packet sizes), execution time is bounded by the network serialization delay along the longest routing path, which is directly proportional to the physical hop distance:
 
-$$t_{\text{latency}} = O(h) = O(\sqrt{D})$$
+$$
+t_{\text{latency}} = O(h) = O(\sqrt{D})
+$$
 
 #### 7.5.1.4 Empirical Verification:
 This $O(\sqrt{D})$ scaling is highly efficient. When scaling a cluster from $16$ devices to $2048$ devices—a **128-fold increase** in physical machine count—the communication execution time of GShard's `AllToAll` collective increases by **only 9-fold** (matching $\sqrt{128} \approx 11.3$). This sub-linear scaling profile is what makes large-scale token routing physically viable.
@@ -2621,7 +2995,9 @@ The second constraint is highly problematic because learned routing algorithms (
 ### 8.1.1 The Expert Capacity Equation
 To map this dynamic load to the static shapes required by Batch GEMM, traditional frameworks enforce a fixed **Expert Capacity** ($C$). For a micro-batch containing $T$ tokens, routed to $E$ experts with top-$k$ gating, the expert capacity $C$ is computed as:
 
-$$C = \left\lceil \frac{T \cdot k}{E} \cdot f \right\rceil$$
+$$
+C = \left\lceil \frac{T \cdot k}{E} \cdot f \right\rceil
+$$
 
 where $f \ge 1$ is the **Capacity Factor** hyperparameter. The capacity factor represents a multiplier on the expected number of tokens that would be assigned to each expert under a perfectly uniform distribution.
 
@@ -2689,7 +3065,9 @@ Instead of scaling a dense tensor to fit Batch GEMM, MegaBlocks groups the route
 
 Let $T_e$ be the actual number of tokens routed to expert $e$. The padded token count for expert $e$ is:
 
-$$M_e = \left\lceil \frac{T_e}{b} \right\rceil \cdot b$$
+$$
+M_e = \left\lceil \frac{T_e}{b} \right\rceil \cdot b
+$$
 
 The total number of rows across all local experts is $M = \sum_{e=0}^{E-1} M_e$. The permuted token activation matrix is $X_{\text{perm}} \in \mathbb{R}^{M \times H}$. The expert weights are packed into a single large dense weight matrix $W_1 \in \mathbb{R}^{H \times E \cdot F}$ (where $F$ is the FFN hidden dimension). The output of the first linear layer is a block-sparse matrix $Y \in \mathbb{R}^{M \times E \cdot F}$ with block-diagonal structure.
 
@@ -2726,15 +3104,21 @@ The forward and backward passes of a two-layer Multi-Layer Perceptron (MLP) MoE 
 #### 8.2.2.1 The Forward Pass
 1.  **First Linear Layer (SDD)**: The permuted token matrix $X_{\text{perm}} \in \mathbb{R}^{M \times H}$ is multiplied by the dense weight matrix $W_1 \in \mathbb{R}^{H \times E \cdot F}$. Because only the tokens corresponding to expert $e$ should be multiplied by expert $e$'s weights, the output $Y$ is block-sparse with topology $\mathcal{T}$. This is computed via Sampled Dense-Dense Matrix Multiplication (SDD):
 
-    $$Y = \text{sdd}(X_{\text{perm}}, W_1, \mathcal{T})$$
+$$
+Y = \text{sdd}(X_{\text{perm}}, W_1, \mathcal{T})
+$$
 
 2.  **Activation Function**: An element-wise activation function $\sigma$ (e.g., GeLU) is applied strictly to the non-zero elements of $Y$, preserving the block-sparse topology $\mathcal{T}$:
 
-    $$Z = \sigma(Y), \quad Z \in \mathbb{R}^{M \times E \cdot F} \text{ (Block-Sparse with topology } \mathcal{T}\text{)}$$
+$$
+Z = \sigma(Y), \quad Z \in \mathbb{R}^{M \times E \cdot F} \text{ (Block-Sparse with topology } \mathcal{T}\text{)}
+$$
 
 3.  **Second Linear Layer (DSD)**: The block-sparse activation matrix $Z$ is multiplied by the dense second-layer weight matrix $W_2 \in \mathbb{R}^{E \cdot F \times H}$. This sparse-dense product results in a dense output matrix $O \in \mathbb{R}^{M \times H}$, computed via Sparse-Dense Matrix Multiplication (DSD):
 
-    $$O = \text{dsd}(Z, W_2)$$
+$$
+O = \text{dsd}(Z, W_2)
+$$
 
 #### 8.2.2.2 The Backward Pass Derivation
 Given the incoming dense gradient of the loss with respect to the output, $\nabla_O \mathcal{L} \in \mathbb{R}^{M \times H}$, the gradients for all parameters and activations are derived below:
@@ -2742,45 +3126,63 @@ Given the incoming dense gradient of the loss with respect to the output, $\nabl
 1.  **Gradient with respect to second-layer weights ($W_2$)**:
     Since $O = Z \cdot W_2$, the weight gradient $\nabla_{W_2} \mathcal{L} \in \mathbb{R}^{E \cdot F \times H}$ is a dense matrix:
     
-    $$\nabla_{W_2} \mathcal{L} = Z^T \cdot \nabla_O \mathcal{L}$$
+$$
+\nabla_{W_2} \mathcal{L} = Z^T \cdot \nabla_O \mathcal{L}
+$$
     
     Since $Z$ is block-sparse, $Z^T$ is a transposed block-sparse matrix of shape $(E \cdot F, M)$. This is a Sparse$^T$-Dense product resulting in a Dense matrix, which is a **DSTD** operation:
     
-    $$\nabla_{W_2} \mathcal{L} = \text{dstd}(Z, \nabla_O \mathcal{L})$$
+$$
+\nabla_{W_2} \mathcal{L} = \text{dstd}(Z, \nabla_O \mathcal{L})
+$$
 
 2.  **Gradient with respect to second-layer activations ($Z$)**:
     The activation gradient $\nabla_Z \mathcal{L} \in \mathbb{R}^{M \times E \cdot F}$ is block-sparse with topology $\mathcal{T}$:
     
-    $$\nabla_Z \mathcal{L} = \nabla_O \mathcal{L} \cdot W_2^T$$
+$$
+\nabla_Z \mathcal{L} = \nabla_O \mathcal{L} \cdot W_2^T
+$$
     
     This is a Dense-Dense product resulting in a Sparse output, which is an **SDDT** operation (SDD with a transposed right operand):
     
-    $$\nabla_Z \mathcal{L} = \text{sdd}(\nabla_O \mathcal{L}, W_2^T, \mathcal{T})$$
+$$
+\nabla_Z \mathcal{L} = \text{sdd}(\nabla_O \mathcal{L}, W_2^T, \mathcal{T})
+$$
 
 3.  **Gradient with respect to first-layer pre-activations ($Y$)**:
     Applying the chain rule through the activation function $\sigma$:
     
-    $$\nabla_Y \mathcal{L} = \nabla_Z \mathcal{L} \odot \sigma'(Y)$$
+$$
+\nabla_Y \mathcal{L} = \nabla_Z \mathcal{L} \odot \sigma'(Y)
+$$
     
     where $\odot$ represents the element-wise Hadamard product. Since both $\nabla_Z \mathcal{L}$ and $Y$ share the block-sparse topology $\mathcal{T}$, $\nabla_Y \mathcal{L} \in \mathbb{R}^{M \times E \cdot F}$ is also block-sparse with topology $\mathcal{T}$.
 
 4.  **Gradient with respect to first-layer activations ($X_{\text{perm}}$)**:
     Since $Y = X_{\text{perm}} \cdot W_1$, the data gradient $\nabla_{X_{\text{perm}}} \mathcal{L} \in \mathbb{R}^{M \times H}$ is a dense matrix:
     
-    $$\nabla_{X_{\text{perm}}} \mathcal{L} = \nabla_Y \mathcal{L} \cdot W_1^T$$
+$$
+\nabla_{X_{\text{perm}}} \mathcal{L} = \nabla_Y \mathcal{L} \cdot W_1^T
+$$
     
     This is a Sparse-Dense product resulting in a Dense matrix, which is a **DSDT** operation (DSD with a transposed right operand):
     
-    $$\nabla_{X_{\text{perm}}} \mathcal{L} = \text{dsdt}(\nabla_Y \mathcal{L}, W_1)$$
+$$
+\nabla_{X_{\text{perm}}} \mathcal{L} = \text{dsdt}(\nabla_Y \mathcal{L}, W_1)
+$$
 
 5.  **Gradient with respect to first-layer weights ($W_1$)**:
     The first-layer weight gradient $\nabla_{W_1} \mathcal{L} \in \mathbb{R}^{H \times E \cdot F}$ is a dense matrix:
     
-    $$\nabla_{W_1} \mathcal{L} = X_{\text{perm}}^T \cdot \nabla_Y \mathcal{L}$$
+$$
+\nabla_{W_1} \mathcal{L} = X_{\text{perm}}^T \cdot \nabla_Y \mathcal{L}
+$$
     
     This is a Dense-Sparse product resulting in a Dense matrix, which is a **DDTS** operation (DDS with a transposed left operand):
     
-    $$\nabla_{W_1} \mathcal{L} = \text{ddts}(X_{\text{perm}}, \nabla_Y \mathcal{L})$$
+$$
+\nabla_{W_1} \mathcal{L} = \text{ddts}(X_{\text{perm}}, \nabla_Y \mathcal{L})
+$$
 
 ### 8.2.3 Sparse Primitives Reference Matrix
 
@@ -3015,13 +3417,19 @@ Mixtral is built upon the structural foundations of the Mistral 7B architecture 
 
 ### 9.1.2 Mathematical Gating and Expert Formulation
 At each layer, for each token $x \in \mathbb{R}^{d_{\text{model}}}$, the router network calculates a sparse routing probability distribution over the 8 experts:
-$$G(x) = \text{Softmax}\left(\text{TopK}(x \cdot W_g)\right)$$
+$$
+G(x) = \text{Softmax}\left(\text{TopK}(x \cdot W_g)\right)
+$$
 Where $W_g \in \mathbb{R}^{d_{\text{model}} \times E}$ represents the gating weights. In Mixtral, $K=2$ experts are selected per token (Top-2 routing). Let $E_i(x)$ represent the output of the $i$-th expert. The combined layer output $y$ is computed as:
-$$y = \sum_{i \in \mathcal{T}} G(x)_i \cdot E_i(x)$$
+$$
+y = \sum_{i \in \mathcal{T}} G(x)_i \cdot E_i(x)
+$$
 Where $\mathcal{T}$ is the set of indices corresponding to the top-2 experts. 
 
 Each expert $E_i$ is parameterized as a standard **SwiGLU** feed-forward block:
-$$E_i(x) = \left( \text{Swish}(x \cdot W_{\text{gate}, i}) \odot (x \cdot W_{\text{up}, i}) \right) \cdot W_{\text{down}, i}$$
+$$
+E_i(x) = \left( \text{Swish}(x \cdot W_{\text{gate}, i}) \odot (x \cdot W_{\text{up}, i}) \right) \cdot W_{\text{down}, i}
+$$
 Where $W_{\text{gate}, i}, W_{\text{up}, i} \in \mathbb{R}^{d_{\text{model}} \times d_{\text{ff}}}$ and $W_{\text{down}, i} \in \mathbb{R}^{d_{\text{ff}} \times d_{\text{model}}}$. In Mixtral 8x7B, the intermediate expert hidden dimension $d_{\text{ff}}$ is set to $14336$.
 
 ### 9.1.3 Active vs. Total Parameter Analysis
@@ -3029,15 +3437,21 @@ The structural parameters of Mixtral 8x7B are detailed in the calculation below:
 
 #### 9.1.3.1 Parameters per SwiGLU Expert ($P_{\text{expert}}$)
 Each SwiGLU expert contains three weight matrices:
-$$P_{\text{expert}} = 3 \cdot d_{\text{model}} \cdot d_{\text{ff}} = 3 \cdot 4096 \cdot 14336 = 176,160,768 \text{ parameters } (\approx 176\text{M})$$
+$$
+P_{\text{expert}} = 3 \cdot d_{\text{model}} \cdot d_{\text{ff}} = 3 \cdot 4096 \cdot 14336 = 176,160,768 \text{ parameters } (\approx 176\text{M})
+$$
 
 #### 9.1.3.2 Total Parameters in MoE FFN Layer ($P_{\text{layer\_FFN}}$)
 With $E=8$ experts and a negligible router $W_g$:
-$$P_{\text{layer\_FFN}} = E \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 8 \cdot 176,160,768 + 4096 \cdot 8 = 1,409,318,912 \text{ parameters } (\approx 1.41\text{B})$$
+$$
+P_{\text{layer\_FFN}} = E \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 8 \cdot 176,160,768 + 4096 \cdot 8 = 1,409,318,912 \text{ parameters } (\approx 1.41\text{B})
+$$
 
 #### 9.1.3.3 Active Parameters in MoE FFN Layer per Token ($P_{\text{layer\_FFN\_active}}$)
 Since only $K=2$ experts are activated:
-$$P_{\text{layer\_FFN\_active}} = K \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 2 \cdot 176,160,768 + 32,768 = 352,354,304 \text{ parameters } (\approx 352\text{M})$$
+$$
+P_{\text{layer\_FFN\_active}} = K \cdot P_{\text{expert}} + d_{\text{model}} \cdot E = 2 \cdot 176,160,768 + 32,768 = 352,354,304 \text{ parameters } (\approx 352\text{M})
+$$
 
 #### 9.1.3.4 Overall Model Scaling Breakdown
 Adding attention weights ($41.94\text{M}$ per layer) and embedding/vocab layers ($32000 \times 4096 \times 2 \approx 262\text{M}$), the overall parameter count is formulated as:
@@ -3095,9 +3509,15 @@ Multi-Head Latent Attention (MLA):
 
 #### 9.2.1.1 Low-Rank Key-Value Joint Compression
 MLA dynamically projects the hidden state $h_t \in \mathbb{R}^d$ into a low-rank latent space:
-$$\mathbf{c}_t^{KV} = W^{DKV} \mathbf{h}_t$$
-$$\mathbf{k}_t^C = W^{UK} \mathbf{c}_t^{KV}$$
-$$\mathbf{v}_t^C = W^{UV} \mathbf{c}_t^{KV}$$
+$$
+\mathbf{c}_t^{KV} = W^{DKV} \mathbf{h}_t
+$$
+$$
+\mathbf{k}_t^C = W^{UK} \mathbf{c}_t^{KV}
+$$
+$$
+\mathbf{v}_t^C = W^{UV} \mathbf{c}_t^{KV}
+$$
 Where:
 *   $\mathbf{c}_t^{KV} \in \mathbb{R}^{d_c}$ is the compressed KV latent vector ($d_c \ll n_h d_h$).
 *   $W^{DKV} \in \mathbb{R}^{d_c \times d}$ is the down-projection matrix.
@@ -3105,37 +3525,59 @@ Where:
 *   $\mathbf{k}_t^C, \mathbf{v}_t^C \in \mathbb{R}^{n_h d_h}$ represent the decompressed query-aligned keys and values.
 
 During pre-training, to minimize activation memory footprint, MLA also applies low-rank compression to the query vector:
-$$\mathbf{c}_t^Q = W^{DQ} \mathbf{h}_t$$
-$$\mathbf{q}_t^C = W^{UQ} \mathbf{c}_t^Q$$
+$$
+\mathbf{c}_t^Q = W^{DQ} \mathbf{h}_t
+$$
+$$
+\mathbf{q}_t^C = W^{UQ} \mathbf{c}_t^Q
+$$
 Where $\mathbf{c}_t^Q \in \mathbb{R}^{d'_c}$ represents the query latent vector, $W^{DQ} \in \mathbb{R}^{d'_c \times d}$ is the down-projection matrix, and $W^{UQ} \in \mathbb{R}^{n_h d_h \times d'_c}$ is the up-projection matrix.
 
 #### 9.2.1.2 Decoupled Rotary Position Embedding (RoPE)
 A critical mathematical hurdle for MLA is that Rotary Position Embeddings (RoPE) are position-sensitive and depend on token-specific rotation matrices $R_t$. If we apply RoPE directly to $\mathbf{k}_t^C$:
-$$\tilde{\mathbf{k}}_t^C = R_t \cdot \mathbf{k}_t^C = R_t \cdot W^{UK} \mathbf{c}_t^{KV}$$
+$$
+\tilde{\mathbf{k}}_t^C = R_t \cdot \mathbf{k}_t^C = R_t \cdot W^{UK} \mathbf{c}_t^{KV}
+$$
 Because matrix multiplication is non-commutative ($R_t \cdot W^{UK} \neq W^{UK} \cdot R_t$), the up-projection $W^{UK}$ cannot be factored out and absorbed into the query projection. This would force the system to decompress and cache the full $n_h d_h$ key matrices for all historical prefix tokens at every generation step, neutralizing the KV cache memory savings.
 
 To solve this, MLA introduces a **Decoupled RoPE Strategy**. It splits the head dimension and allocates an independent, non-compressed channel strictly to carry position information:
-$$\mathbf{q}_{t, i} = [\mathbf{q}_{t, i}^C; \mathbf{q}_{t, i}^R]$$
-$$\mathbf{k}_{t, i} = [\mathbf{k}_{t, i}^C; \mathbf{k}_t^R]$$
+$$
+\mathbf{q}_{t, i} = [\mathbf{q}_{t, i}^C; \mathbf{q}_{t, i}^R]
+$$
+$$
+\mathbf{k}_{t, i} = [\mathbf{k}_{t, i}^C; \mathbf{k}_t^R]
+$$
 Where:
 *   $\mathbf{q}_{t, i}^C \in \mathbb{R}^{d_h}$ and $\mathbf{k}_{t, i}^C \in \mathbb{R}^{d_h}$ are the compressed, position-agnostic content keys/queries.
 *   $\mathbf{q}_{t, i}^R \in \mathbb{R}^{d_h^R}$ is the decoupled, position-embedded query:
-    $$\mathbf{q}_{t, i}^R = \text{RoPE}(W^{QR}_i \mathbf{c}_t^Q)$$
+$$
+\mathbf{q}_{t, i}^R = \text{RoPE}(W^{QR}_i \mathbf{c}_t^Q)
+$$
 *   $\mathbf{k}_t^R \in \mathbb{R}^{d_h^R}$ is a **single, shared key** that carries the RoPE position embedding across all heads:
-    $$\mathbf{k}_t^R = \text{RoPE}(W^{KR} \mathbf{h}_t)$$
+$$
+\mathbf{k}_t^R = \text{RoPE}(W^{KR} \mathbf{h}_t)
+$$
 *   $[ \cdot ; \cdot ]$ represents tensor concatenation along the head dimension, yielding a total head dimension of $d_h + d_h^R$.
 
 #### 9.2.1.3 Full MLA Mathematical Formulation
 Let $n_h$ be the number of heads. For each head $i \in \{1, \dots, n_h\}$, the attention computation is formulated as:
-$$\mathbf{o}_{t, i} = \sum_{j=1}^t \text{Softmax}_j \left( \frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_h + d_h^R}} \right) \mathbf{v}_{j, i}^C$$
-$$\mathbf{u}_t = W^O [\mathbf{o}_{t, 1}; \mathbf{o}_{t, 2}; \dots; \mathbf{o}_{t, n_h}]$$
+$$
+\mathbf{o}_{t, i} = \sum_{j=1}^t \text{Softmax}_j \left( \frac{\mathbf{q}_{t, i}^T \mathbf{k}_{j, i}}{\sqrt{d_h + d_h^R}} \right) \mathbf{v}_{j, i}^C
+$$
+$$
+\mathbf{u}_t = W^O [\mathbf{o}_{t, 1}; \mathbf{o}_{t, 2}; \dots; \mathbf{o}_{t, n_h}]
+$$
 Where $W^O \in \mathbb{R}^{d \times n_h d_h}$ is the output projection.
 
 #### 9.2.1.4 Linear Projection Absorption during Inference
 During generation, we do not need to materialize the keys and values. The content inner product can be computed directly in the compressed latent space:
-$$(\mathbf{q}_{t, i}^C)^T \mathbf{k}_{j, i}^C = (\mathbf{c}_t^Q)^T (W^{UQ}_i)^T W^{UK}_i \mathbf{c}_j^{KV} = (\mathbf{c}_t^Q)^T M_i \mathbf{c}_j^{KV}$$
+$$
+(\mathbf{q}_{t, i}^C)^T \mathbf{k}_{j, i}^C = (\mathbf{c}_t^Q)^T (W^{UQ}_i)^T W^{UK}_i \mathbf{c}_j^{KV} = (\mathbf{c}_t^Q)^T M_i \mathbf{c}_j^{KV}
+$$
 Where $M_i = (W^{UQ}_i)^T W^{UK}_i \in \mathbb{R}^{d'_c \times d_c}$ is pre-computed and cached. Similarly, the up-projection for value matrices can be absorbed into the output projection:
-$$W^O [\mathbf{o}_{t, 1}; \dots; \mathbf{o}_{t, n_h}] = \sum_{i=1}^{n_h} W^O_i \left( \text{AttnWeight}_{t, j, i} \cdot W^{UV}_i \mathbf{c}_j^{KV} \right) = \sum_{i=1}^{n_h} \text{AttnWeight}_{t, j, i} \cdot U_i \mathbf{c}_j^{KV}$$
+$$
+W^O [\mathbf{o}_{t, 1}; \dots; \mathbf{o}_{t, n_h}] = \sum_{i=1}^{n_h} W^O_i \left( \text{AttnWeight}_{t, j, i} \cdot W^{UV}_i \mathbf{c}_j^{KV} \right) = \sum_{i=1}^{n_h} \text{AttnWeight}_{t, j, i} \cdot U_i \mathbf{c}_j^{KV}
+$$
 Where $U_i = W^O_i W^{UV}_i \in \mathbb{R}^{d \times d_c}$ is pre-computed.
 
 #### 9.2.1.5 KV Cache Storage Metrics
@@ -3143,7 +3585,9 @@ By decoupling RoPE, DeepSeek-V2 only needs to cache the latent vector $\mathbf{c
 *   **Elements cached per token:** $d_c + d_h^R = 512 + 64 = 576$ elements.
 *   **Comparison to Standard MHA:** A dense model with identical configuration ($n_h = 128, d_h = 128$) would require caching $2 \cdot n_h \cdot d_h = 2 \cdot 128 \cdot 128 = 32,768$ elements. MLA achieves a **$98.24\%$ reduction** in KV cache memory footprint.
 *   **GQA Equivalence:** The cached footprint of MLA is mathematically equivalent to GQA with only:
-    $$n_g = \frac{576}{2 \cdot 128} = 2.25 \text{ groups}$$
+$$
+n_g = \frac{576}{2 \cdot 128} = 2.25 \text{ groups}
+$$
     Yet it retains the full representation capacity of 128 independent query heads, significantly outperforming standard GQA.
 
 In production serving, DeepSeek-V2 applies low-bit **6-bit KV Cache Quantization**, compressing the serving memory usage by a further $62.5\%$ to boost maximum generation throughput to $5.76\times$ compared to standard dense serving.
@@ -3177,14 +3621,20 @@ DeepSeekMoE:
 
 #### 9.2.2.1 Mathematical Formulation of DeepSeekMoE
 Let $\mathbf{u}_t \in \mathbb{R}^d$ be the input to the MoE layer. The layer output $\mathbf{h}'_t$ is computed as the sum of shared and routed expert computations:
-$$\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j, t} \text{FFN}_j^{(r)}(\mathbf{u}_t)$$
+$$
+\mathbf{h}'_t = \mathbf{u}_t + \sum_{i=1}^{N_s} \text{FFN}_i^{(s)}(\mathbf{u}_t) + \sum_{j=1}^{N_r} g_{j, t} \text{FFN}_j^{(r)}(\mathbf{u}_t)
+$$
 Where:
 *   $\text{FFN}_i^{(s)}$ represents the $i$-th **Shared Expert** (always active).
 *   $\text{FFN}_j^{(r)}$ represents the $j$-th **Routed Expert**.
 *   $N_s$ and $N_r$ denote the total number of shared and routed experts, respectively.
 *   $g_{j, t}$ represents the sparse gating value for the $j$-th routed expert:
-    $$g_{j, t} = \begin{cases} s_{j, t}, & s_{j, t} \in \text{TopK}_r \left(\{ s_{l, t} \mid 1 \le l \le N_r \}, K_r\right) \\ 0, & \text{otherwise} \end{cases}$$
-    $$s_{j, t} = \text{Softmax}_j \left( \mathbf{u}_t^T \mathbf{e}_j \right)$$
+$$
+g_{j, t} = \begin{cases} s_{j, t}, & s_{j, t} \in \text{TopK}_r \left(\{ s_{l, t} \mid 1 \le l \le N_r \}, K_r\right) \\ 0, & \text{otherwise} \end{cases}
+$$
+$$
+s_{j, t} = \text{Softmax}_j \left( \mathbf{u}_t^T \mathbf{e}_j \right)
+$$
     Where $\mathbf{e}_j$ represents the centroid representation of the $j$-th routed expert.
 
 #### 9.2.2.2 Architectural Dimensions of DeepSeek-V2
@@ -3194,7 +3644,9 @@ In DeepSeek-V2's MoE layers:
 *   **Activated Routed Experts per Token:** $K_r = 6$.
 *   **Expert Intermediate Hidden Dimension:** $d_{\text{ff}} = 1536$.
 *   **FFN Dense Baseline Parameter Match:** A standard dense baseline with intermediate dimension $d_{\text{dense\_ff}} = 4 \cdot d_{\text{model}} = 20,480$ is split. Under DeepSeekMoE, each expert's intermediate size is scaled down to $1536$. The FFN compute cost of $N_s + K_r = 2 + 6 = 8$ active experts is equivalent to:
-    $$\text{Compute Equivalence} = 8 \cdot 1536 = 12,288 \text{ channels}$$
+$$
+\text{Compute Equivalence} = 8 \cdot 1536 = 12,288 \text{ channels}
+$$
     Which is approximately $60\%$ the FLOP budget of the dense baseline, saving massive computational overhead while scaling total experts parameters to $225.4\text{B}$.
 
 ---
@@ -3211,25 +3663,41 @@ In DeepSeek-V2, setting $M = 3$ restricts network communication to at most 3 des
 
 ### 9.2.4 Modern Load-Balancing Optimization
 DeepSeek-V2 implements three distinct auxiliary losses to ensure balance across experts, devices, and communication networks:
-$$\mathcal{L}_{\text{balance\_total}} = \alpha_1 \mathcal{L}_{\text{ExpBal}} + \alpha_2 \mathcal{L}_{\text{DevBal}} + \alpha_3 \mathcal{L}_{\text{CommBal}}$$
+$$
+\mathcal{L}_{\text{balance\_total}} = \alpha_1 \mathcal{L}_{\text{ExpBal}} + \alpha_2 \mathcal{L}_{\text{DevBal}} + \alpha_3 \mathcal{L}_{\text{CommBal}}
+$$
 
 #### 9.2.4.1 Expert-Level Balance Loss ($L_{\text{ExpBal}}$)
 To prevent expert routing collapse ([Switch Transformers](https://arxiv.org/abs/2101.03961)), this loss encourages uniform token distribution across all $N_r$ routed experts:
-$$\mathcal{L}_{\text{ExpBal}} = \sum_{i=1}^{N_r} f_i P_i$$
-$$f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ selects Expert } i)$$
-$$P_i = \frac{1}{T} \sum_{t=1}^T s_{i, t}$$
+$$
+\mathcal{L}_{\text{ExpBal}} = \sum_{i=1}^{N_r} f_i P_i
+$$
+$$
+f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ selects Expert } i)
+$$
+$$
+P_i = \frac{1}{T} \sum_{t=1}^T s_{i, t}
+$$
 Where $T$ is the number of tokens in the batch, and $\alpha_1 = 0.003$.
 
 #### 9.2.4.2 Device-Level Balance Loss ($L_{\text{DevBal}}$)
 Under Expert Parallelism, experts are partitioned into $D$ groups $\{ \mathcal{E}_1, \dots, \mathcal{E}_D \}$ deployed on $D$ physical devices. To ensure balanced computational load across accelerators:
-$$\mathcal{L}_{\text{DevBal}} = \sum_{i=1}^D f'_i P'_i$$
-$$f'_i = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j \quad \text{and} \quad P'_i = \sum_{j \in \mathcal{E}_i} P_j$$
+$$
+\mathcal{L}_{\text{DevBal}} = \sum_{i=1}^D f'_i P'_i
+$$
+$$
+f'_i = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j \quad \text{and} \quad P'_i = \sum_{j \in \mathcal{E}_i} P_j
+$$
 Where $\alpha_2 = 0.05$.
 
 #### 9.2.4.3 Communication Balance Loss ($L_{\text{CommBal}}$)
 Even if computation is balanced, communication bottlenecks can occur if a single device receives a disproportionate number of tokens. To balance network traffic:
-$$\mathcal{L}_{\text{CommBal}} = \sum_{i=1}^D f''_i P''_i$$
-$$f''_i = \frac{D}{M T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ is sent to Device } i) \quad \text{and} \quad P''_i = \sum_{j \in \mathcal{E}_i} P_j$$
+$$
+\mathcal{L}_{\text{CommBal}} = \sum_{i=1}^D f''_i P''_i
+$$
+$$
+f''_i = \frac{D}{M T} \sum_{t=1}^T \mathbb{1}(\text{Token } t \text{ is sent to Device } i) \quad \text{and} \quad P''_i = \sum_{j \in \mathcal{E}_i} P_j
+$$
 Where $\alpha_3 = 0.02$.
 
 #### 9.2.4.4 Token-Dropping Strategy
@@ -3259,11 +3727,17 @@ GRPO (No Critic Model, estimated from Group):
 
 #### 9.2.5.1 Mathematical Formulations
 Instead of training a separate Critic model of size equivalent to the Policy model (236B parameters), GRPO samples a group of $G$ outputs $\{o_1, \dots, o_G\}$ from the current policy $\pi_\theta$ for each prompt $q$. The advantage $A_i$ for each completion $o_i$ is calculated relative to the group scores:
-$$A_i = \frac{r_i - \text{mean}(\{r_1, \dots, r_G\})}{\text{std}(\{r_1, \dots, r_G\})}$$
+$$
+A_i = \frac{r_i - \text{mean}(\{r_1, \dots, r_G\})}{\text{std}(\{r_1, \dots, r_G\})}
+$$
 The policy objective is then formulated as:
-$$\mathcal{J}_{\text{GRPO}}(\theta) = \mathbb{E} \left[ \frac{1}{G} \sum_{i=1}^G \left( \min \left( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_{\text{old}}}(o_i \mid q)} A_i, \, \text{clip}\left(\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_{\text{old}}}(o_i \mid q)}, 1-\epsilon, 1+\epsilon\right) A_i \right) - \beta D_{KL}(\pi_\theta \mid\mid \pi_{\text{ref}}) \right) \right]$$
+$$
+\mathcal{J}_{\text{GRPO}}(\theta) = \mathbb{E} \left[ \frac{1}{G} \sum_{i=1}^G \left( \min \left( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_{\text{old}}}(o_i \mid q)} A_i, \, \text{clip}\left(\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_{\text{old}}}(o_i \mid q)}, 1-\epsilon, 1+\epsilon\right) A_i \right) - \beta D_{KL}(\pi_\theta \mid\mid \pi_{\text{ref}}) \right) \right]
+$$
 Where the KL divergence is calculated analytically to stabilize optimization:
-$$D_{KL}(\pi_\theta \mid\mid \pi_{\text{ref}}) = \frac{\pi_{\text{ref}}(o_i \mid q)}{\pi_\theta(o_i \mid q)} - \log \frac{\pi_{\text{ref}}(o_i \mid q)}{\pi_\theta(o_i \mid q)} - 1$$
+$$
+D_{KL}(\pi_\theta \mid\mid \pi_{\text{ref}}) = \frac{\pi_{\text{ref}}(o_i \mid q)}{\pi_\theta(o_i \mid q)} - \log \frac{\pi_{\text{ref}}(o_i \mid q)}{\pi_\theta(o_i \mid q)} - 1
+$$
 GRPO dramatically reduces GPU memory overhead during alignment, allowing RL training to scale easily across massive sparse models.
 
 ---
@@ -3312,7 +3786,9 @@ SuperGLUE Commitment Bank (250 examples)     SuperGLUE ReCoRD Task (138k example
 Standard dropout applied uniformly across the network is insufficient to prevent overfitting in the massive parameter space of sparse experts.
 *   **Uniform Dropout Constraint:** Increasing global dropout (e.g., $>0.1$) degrades representation learning across shared layers and severely hurts downstream performance.
 *   **Expert Dropout Solution:** To regularize the overparameterized experts without starving the shared layers, ST-MoE introduces a specialized **Expert Dropout** scheme. The global dropout is maintained at a standard level ($0.1$), but the dropout rate is increased specifically within the internal feed-forward projection of the MoE experts:
-    $$\text{Expert Dropout Rate} = 0.4$$
+$$
+\text{Expert Dropout Rate} = 0.4
+$$
     This selective regularization yields substantial generalization benefits, mitigating validation performance degradation on low-data benchmarks.
 
 ---
@@ -3480,29 +3956,43 @@ Token-Choice (Standard Top-k)         Expert-Choice (Zhou et al.)          Soft 
 #### 9.8.1.1 Standard Softmax Routing (Token-Choice Top-1/Top-2)
 In standard Top-K models ([Shazeer et al. 2017](https://arxiv.org/abs/1701.06538), [Lepikhin et al. 2020](https://arxiv.org/abs/2006.16668), [Fedus et al. 2021](https://arxiv.org/abs/2101.03961)), the gating probability of token $x$ to expert $i$ is calculated by applying a softmax over the top scoring experts:
 
-$$G(x)_i = \text{Softmax}\left(\text{KeepTopK}\left(x \cdot W_g, K\right)\right)_i = \frac{\exp(h(x)_i \cdot \mathbb{I}_i)}{\sum_{j=1}^E \exp(h(x)_j \cdot \mathbb{I}_j)}$$
+$$
+G(x)_i = \text{Softmax}\left(\text{KeepTopK}\left(x \cdot W_g, K\right)\right)_i = \frac{\exp(h(x)_i \cdot \mathbb{I}_i)}{\sum_{j=1}^E \exp(h(x)_j \cdot \mathbb{I}_j)}
+$$
 
 where $h(x) = x \cdot W_g$ represents the router logits, and $\mathbb{I}_i$ is an indicator variable denoting whether $h(x)_i$ is in the top $K$ elements.
 
 #### 9.8.1.2 Expert Choice Routing (Expert-picks-Token)
 [Zhou et al. 2022](https://arxiv.org/abs/2202.09368) inverted this gating logic. Given token representations $X \in \mathbb{R}^{N \times d_{\text{model}}}$, the router calculates the affinity matrix $S = \text{Softmax}(X \cdot W_g) \in \mathbb{R}^{N \times E}$, where softmax is applied along the expert dimension (columns). Rather than choosing the top experts per token, each expert $e$ selects the top $k$ tokens along the token dimension (rows of $S^T$):
 
-$$G, I = \text{TopK}(S^T, k), \quad k = \frac{N \cdot c}{E}$$
+$$
+G, I = \text{TopK}(S^T, k), \quad k = \frac{N \cdot c}{E}
+$$
 
 where $c$ is the capacity factor. The expert computation is executed on the gathered tokens:
 
-$$Y_e = \text{TopK\_Gather}(X, I_e) \cdot W_e$$
+$$
+Y_e = \text{TopK\_Gather}(X, I_e) \cdot W_e
+$$
 
 #### 9.8.1.3 Soft MoE (Continuous Token-Mixing)
 [Puigcerver et al. 2023](https://arxiv.org/abs/2308.00951) formulated a fully differentiable, non-discrete routing mechanism. Let $X \in \mathbb{R}^{m \times d}$ be the input tokens, and $\Phi \in \mathbb{R}^{d \times (n \cdot p)}$ be learnable slot parameters where $n$ is the number of experts and $p$ is the number of slots per expert. The affinity logits are computed as $A = X \Phi \in \mathbb{R}^{m \times (n \cdot p)}$.
 1. **Dispatch Weights ($D \in \mathbb{R}^{m \times (n \cdot p)}$)** are normalized per column (per slot):
-   $$D_{ij} = \frac{\exp(A_{ij})}{\sum_{i'=1}^m \exp(A_{i'j})}$$
+$$
+D_{ij} = \frac{\exp(A_{ij})}{\sum_{i'=1}^m \exp(A_{i'j})}
+$$
    The input slots $\tilde{X} \in \mathbb{R}^{(n \cdot p) \times d}$ are constructed as:
-   $$\tilde{X} = D^T X$$
+$$
+\tilde{X} = D^T X
+$$
 2. **Combine Weights ($C \in \mathbb{R}^{m \times (n \cdot p)}$)** are normalized per row (per token):
-   $$C_{ij} = \frac{\exp(A_{ij})}{\sum_{j'=1}^{n \cdot p} \exp(A_{ij'})}$$
+$$
+C_{ij} = \frac{\exp(A_{ij})}{\sum_{j'=1}^{n \cdot p} \exp(A_{ij'})}
+$$
    The output tokens $Y \in \mathbb{R}^{m \times d}$ are recovered via:
-   $$Y = C \tilde{Y}, \quad \text{where } \tilde{Y}_i = f_{\lfloor i/p \rfloor}(\tilde{X}_i)$$
+$$
+Y = C \tilde{Y}, \quad \text{where } \tilde{Y}_i = f_{\lfloor i/p \rfloor}(\tilde{X}_i)
+$$
 
 ### 9.8.2 Normalized Sigmoid Gating and the Parametric Leap
 
@@ -3512,7 +4002,9 @@ When there is parameter overlap (e.g., redundant or un-activated expert paths), 
 
 To solve this, DeepSeek-V3 introduced **Normalized Sigmoid Gating** for routed experts:
 
-$$s_{i, t} = \frac{\sigma(u_t^T e_i)}{\sum_{j=1}^{N_r} \sigma(u_t^T e_j)}$$
+$$
+s_{i, t} = \frac{\sigma(u_t^T e_i)}{\sum_{j=1}^{N_r} \sigma(u_t^T e_j)}
+$$
 
 where $\sigma(z) = \frac{1}{1 + \exp(-z)}$ is the sigmoid activation, and $e_i$ is the routed expert centroid. 
 
@@ -3521,7 +4013,9 @@ Unlike softmax, where the pre-activations are coupled under the exponent, the si
 
 This **forces a mathematical misspecification**, shifting the convergence target to a boundary point $\check{G}_2$ where all expert parameters are **strictly distinct and well-separated**. Because the experts are well-separated, parameter overlap is impossible, and the asymptotic convergence rate collapses back to the optimal, first-order parametric rate:
 
-$$\text{Estimation Error} \sim \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}$$
+$$
+\text{Estimation Error} \sim \mathbf{\tilde{O}_P\left(n^{-1/2}\right)}
+$$
 
 This parametric leap slashes the sample complexity of the routed experts from **$\mathcal{O}\left(\epsilon^{-12}\right)$** to **$\mathcal{O}\left(\epsilon^{-2}\right)$**. This theoretical acceleration explains why sigmoid gating stabilizes the entire network's routing decisions significantly faster, prevents expert collapse, and suppresses training loss spikes without destructive balance penalties.
 

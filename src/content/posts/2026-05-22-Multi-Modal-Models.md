@@ -75,14 +75,20 @@ Before multimodal models could align text with vision, vision itself had to be r
 
 An image $\mathbf{x} \in \mathbb{R}^{H \times W \times C}$ is split into a sequence of non-overlapping 2D patches $\mathbf{x}_p \in \mathbb{R}^{N \times (P^2 \cdot C)}$, where $P \times P$ is the patch resolution (typically $16 \times 16$) and $N = HW/P^2$ is the resulting number of tokens. Each patch is flattened and projected into the Transformer's latent dimension $D$:
 
-$$\mathbf{z}_0 = [\mathbf{x}_{class}; \; \mathbf{x}_p^1\mathbf{E}; \; \mathbf{x}_p^2\mathbf{E}; \; \dots; \; \mathbf{x}_p^N\mathbf{E}] + \mathbf{E}_{pos}$$
+$$
+\mathbf{z}_0 = [\mathbf{x}_{class}; \; \mathbf{x}_p^1\mathbf{E}; \; \mathbf{x}_p^2\mathbf{E}; \; \dots; \; \mathbf{x}_p^N\mathbf{E}] + \mathbf{E}_{pos}
+$$
 
 where $\mathbf{E} \in \mathbb{R}^{(P^2 \cdot C) \times D}$ is the patch embedding projection matrix, $\mathbf{x}_{class} \in \mathbb{R}^{1 \times D}$ is a learnable classification token analogous to BERT's `[CLS]`, and $\mathbf{E}_{pos} \in \mathbb{R}^{(N+1) \times D}$ is a standard 1D learnable positional embedding.
 
 The $l$-th Transformer block applies Multi-head Self-Attention (MSA) and a Feed-Forward Network (FFN) with pre-layer normalization:
 
-$$\mathbf{z}'_l = \text{MSA}(\text{LN}(\mathbf{z}_{l-1})) + \mathbf{z}_{l-1}$$
-$$\mathbf{z}_l = \text{FFN}(\text{LN}(\mathbf{z}'_l)) + \mathbf{z}'_l$$
+$$
+\mathbf{z}'_l = \text{MSA}(\text{LN}(\mathbf{z}_{l-1})) + \mathbf{z}_{l-1}
+$$
+$$
+\mathbf{z}_l = \text{FFN}(\text{LN}(\mathbf{z}'_l)) + \mathbf{z}'_l
+$$
 
 #### Key Implementation Details
 
@@ -113,7 +119,9 @@ Unlike CNNs which possess strong spatial inductive biases (translation invarianc
 
 The model is trained using a teacher-student paradigm where the teacher is a high-performing CNN (e.g., RegNetY-16GF). Let $\psi$ be the classifier over the class token and $\psi_d$ be the classifier over the distillation token. The combined loss is:
 
-$$\mathcal{L}_{global} = (1 - \alpha)\,\mathcal{L}_{CE}(\psi(\mathbf{z}_{class}), y) + \alpha\,\mathcal{L}_{dist}(\psi_d(\mathbf{z}_{dist}), y_{teacher})$$
+$$
+\mathcal{L}_{global} = (1 - \alpha)\,\mathcal{L}_{CE}(\psi(\mathbf{z}_{class}), y) + \alpha\,\mathcal{L}_{dist}(\psi_d(\mathbf{z}_{dist}), y_{teacher})
+$$
 
 DeiT supports **hard distillation**, where $y_{teacher} = \operatorname{argmax}(\mathbf{p}_{teacher})$ is the hard class decision of the teacher. Empirically, hard distillation outperforms soft distillation because it forces the student to match the teacher's confident predictions, providing a clear and unambiguous training signal, rather than imitating a soft probability distribution.
 
@@ -204,11 +212,15 @@ DETR uses a CNN backbone to extract a 2D feature map, which is flattened and fed
 
 At training time, the Hungarian Algorithm finds the optimal one-to-one bipartite assignment $\hat{\sigma}$ between the $N$ predictions and the (padded) ground-truth set $\{y_i\}$, minimizing a combined matching cost:
 
-$$\hat{\sigma} = \arg\min_{\sigma \in \mathfrak{S}_N} \sum_i \mathcal{L}_{match}(y_i, \hat{y}_{\sigma(i)})$$
+$$
+\hat{\sigma} = \arg\min_{\sigma \in \mathfrak{S}_N} \sum_i \mathcal{L}_{match}(y_i, \hat{y}_{\sigma(i)})
+$$
 
 The training loss then penalizes this optimal assignment:
 
-$$\mathcal{L}_{Hungarian}(y, \hat{y}) = \sum_i \left[-\log\hat{p}_{\hat{\sigma}(i)}(c_i) + \mathbb{1}_{[c_i \neq \varnothing]}\mathcal{L}_{box}(b_i, \hat{b}_{\hat{\sigma}(i)})\right]$$
+$$
+\mathcal{L}_{Hungarian}(y, \hat{y}) = \sum_i \left[-\log\hat{p}_{\hat{\sigma}(i)}(c_i) + \mathbb{1}_{[c_i \neq \varnothing]}\mathcal{L}_{box}(b_i, \hat{b}_{\hat{\sigma}(i)})\right]
+$$
 
 where $\mathcal{L}_{box}$ is a combination of L1 loss and generalized IoU (GIoU) loss to handle scale variation in bounding box regression.
 
@@ -229,10 +241,18 @@ Audio signals are 1D waveforms characterized by dense temporal dependencies and 
 
 Rather than stacking attention and convolution sequentially, the Conformer uses a "Macaron" sandwich with half-step Feed-Forward (FFN) modules bracketing the attention and convolution modules:
 
-$$\tilde{\mathbf{x}} = \mathbf{x} + \frac{1}{2}\,\text{FFN}(\mathbf{x})$$
-$$\mathbf{x}' = \tilde{\mathbf{x}} + \text{MHSA}(\tilde{\mathbf{x}})$$
-$$\mathbf{x}'' = \mathbf{x}' + \text{Conv}(\mathbf{x}')$$
-$$\mathbf{y} = \text{LayerNorm}\!\left(\mathbf{x}'' + \frac{1}{2}\,\text{FFN}(\mathbf{x}'')\right)$$
+$$
+\tilde{\mathbf{x}} = \mathbf{x} + \frac{1}{2}\,\text{FFN}(\mathbf{x})
+$$
+$$
+\mathbf{x}' = \tilde{\mathbf{x}} + \text{MHSA}(\tilde{\mathbf{x}})
+$$
+$$
+\mathbf{x}'' = \mathbf{x}' + \text{Conv}(\mathbf{x}')
+$$
+$$
+\mathbf{y} = \text{LayerNorm}\!\left(\mathbf{x}'' + \frac{1}{2}\,\text{FFN}(\mathbf{x}'')\right)
+$$
 
 The **Convolution Module** is itself a sophisticated sub-block:
 
@@ -286,7 +306,9 @@ The 1D raw waveform is transformed into a 2D log-mel spectrogram of shape $128 \
 
 **Key implementation detail:** AST transfers weights from a ViT pre-trained on ImageNet-1k. The positional embeddings must be adapted from the 2D image grid (e.g., $14 \times 14$ for $224 \times 224$ images with $16 \times 16$ patches) to the audio grid (e.g., $12 \times 101$). This is done via bilinear interpolation of the 2D positional embedding matrix:
 
-$$\mathbf{E}_{pos}^{audio} = \text{BilinearInterp}(\mathbf{E}_{pos}^{image}, \; (12 \times 101) \to (14 \times 14))$$
+$$
+\mathbf{E}_{pos}^{audio} = \text{BilinearInterp}(\mathbf{E}_{pos}^{image}, \; (12 \times 101) \to (14 \times 14))
+$$
 
 This transfer is critical — training from scratch without ImageNet pre-training loses approximately 0.8–1.0 mAP on AudioSet, demonstrating that low-level spatial patch statistics transfer meaningfully from natural images to spectrograms.
 
@@ -349,14 +371,18 @@ Dual-encoder networks establish a shared latent space where disparate modalities
 
 Given a batch of $N$ (image, text) pairs, let $\mathbf{I}_i \in \mathbb{R}^D$ and $\mathbf{T}_j \in \mathbb{R}^D$ be $\ell_2$-normalized embeddings from the image and text encoder, respectively. The cosine similarity matrix is:
 
-$$\mathbf{S}_{i,j} = \mathbf{I}_i^\top \mathbf{T}_j \cdot e^\tau$$
+$$
+\mathbf{S}_{i,j} = \mathbf{I}_i^\top \mathbf{T}_j \cdot e^\tau
+$$
 
 where $\tau$ is a learnable log-temperature parameter (initialized to $\ln(1/0.07)$). The symmetric cross-entropy loss maximizes similarity for the $N$ matched diagonal pairs while pushing apart the $N(N-1)$ off-diagonal negative pairs:
 
 $$\mathcal{L}_{img} = -\frac{1}{N}\sum_{i=1}^N \log \frac{e^{\mathbf{S}_{i,i}}}{\sum_{j=1}^N e^{\mathbf{S}_{i,j}}}, \quad
 \mathcal{L}_{txt} = -\frac{1}{N}\sum_{j=1}^N \log \frac{e^{\mathbf{S}_{j,j}}}{\sum_{i=1}^N e^{\mathbf{S}_{i,j}}}$$
 
-$$\mathcal{L}_{CLIP} = \frac{1}{2}\left(\mathcal{L}_{img} + \mathcal{L}_{txt}\right)$$
+$$
+\mathcal{L}_{CLIP} = \frac{1}{2}\left(\mathcal{L}_{img} + \mathcal{L}_{txt}\right)
+$$
 
 > [!IMPORTANT]
 > The **batch size is critical** to CLIP's performance. Each sample's negative examples are all other images and texts in the batch. CLIP was trained with enormous batch sizes (up to **32,768**), which provides $32,767$ negatives per anchor and creates a very discriminative training signal. For practitioners with limited GPU memory, using **distributed negatives** across GPUs (gathering all embeddings before computing the loss) is essential to maintain a large effective batch.
@@ -423,7 +449,9 @@ graph LR
 
 Visual features from the vision encoder (NFNet-F6 or CLIP ViT) vary in size with resolution and video length. The Perceiver Resampler compresses these into exactly 64 visual tokens via cross-attention between a fixed set of 64 learned latent queries $\{\mathbf{q}_k\}_{k=1}^{64}$ and the full visual feature set:
 
-$$\text{PerceiverOutput} = \text{CrossAttention}(\mathbf{Q}=\mathbf{q}, \; \mathbf{K}=\mathbf{V}=\mathbf{z}_{visual})$$
+$$
+\text{PerceiverOutput} = \text{CrossAttention}(\mathbf{Q}=\mathbf{q}, \; \mathbf{K}=\mathbf{V}=\mathbf{z}_{visual})
+$$
 
 The Perceiver Resampler adds ~200M parameters and is trained end-to-end. Its fixed 64-token output is fed to the gated cross-attention layers in the frozen LLM.
 
@@ -431,7 +459,9 @@ The Perceiver Resampler adds ~200M parameters and is trained end-to-end. Its fix
 
 Flamingo inserts trainable **Gated Attention-Dense (GALA)** blocks between existing self-attention and FFN layers of the frozen Chinchilla LLM. A tanh-gated residual connection ensures the LLM's behavior is unchanged at initialization:
 
-$$\mathbf{x} \leftarrow \mathbf{x} + \tanh(\alpha) \cdot \text{CrossAttn}(\text{LN}(\mathbf{x}), \; \mathbf{z}_{visual})$$
+$$
+\mathbf{x} \leftarrow \mathbf{x} + \tanh(\alpha) \cdot \text{CrossAttn}(\text{LN}(\mathbf{x}), \; \mathbf{z}_{visual})
+$$
 
 where $\alpha$ is a scalar gating parameter initialized to $0$, so $\tanh(0) = 0$. At initialization, the model behaves exactly as the base text-only Chinchilla LLM. Gradient flow through $\tanh(\alpha)$ slowly opens the gate as training progresses, preventing catastrophic early training instability.
 
@@ -540,7 +570,9 @@ This produced 158K instruction-following examples categorized as:
 
 LLaVA connects a pre-trained CLIP ViT-L/14 encoder (which outputs a grid of 256 patch features) to a LLaMA-13B via a single trainable linear layer $\mathbf{W} \in \mathbb{R}^{D_{visual} \times D_{LLM}}$:
 
-$$\mathbf{H}_v = \mathbf{Z}_v \mathbf{W}$$
+$$
+\mathbf{H}_v = \mathbf{Z}_v \mathbf{W}
+$$
 
 The projected visual tokens $\mathbf{H}_v \in \mathbb{R}^{256 \times D_{LLM}}$ are prepended to the tokenized text instruction and fed to the LLM. The entire image is treated as 256 "soft tokens" in the LLM's context window.
 
@@ -552,7 +584,9 @@ The projected visual tokens $\mathbf{H}_v \in \mathbb{R}^{256 \times D_{LLM}}$ a
 
 LLaVA-1.5 [[11]](#15-bibliography--citation-registry) replaced the linear projection with a **two-layer MLP connector** (with GELU activation), increased visual resolution to $336 \times 336$ (yielding 576 tokens per image), and trained on a curated mix of academic task-oriented datasets (VQA-v2, GQA, TextVQA, OKVQA, COCO, etc.):
 
-$$\mathbf{H}_v = \text{MLP}(\mathbf{Z}_v) = \sigma(\mathbf{Z}_v \mathbf{W}_1 + \mathbf{b}_1)\mathbf{W}_2 + \mathbf{b}_2$$
+$$
+\mathbf{H}_v = \text{MLP}(\mathbf{Z}_v) = \sigma(\mathbf{Z}_v \mathbf{W}_1 + \mathbf{b}_1)\mathbf{W}_2 + \mathbf{b}_2
+$$
 
 Despite these simple changes and only 1.2M training examples, LLaVA-1.5 outperformed BLIP-2 (with 129M pre-training pairs) on 11 of 12 standard benchmarks.
 
@@ -575,7 +609,9 @@ CogVLM keeps the vision encoder (EVA2-CLIP-E, 4.4B) and LLM (Vicuna-7B) frozen, 
 
 The visual expert effectively **doubles** the parameter count of each Transformer block for visual tokens, without adding FLOPs (since text and visual tokens never mix within a single attention computation):
 
-$$\text{Attn}(\mathbf{X}) = \text{Softmax}\!\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\!\mathbf{V}$$
+$$
+\text{Attn}(\mathbf{X}) = \text{Softmax}\!\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\!\mathbf{V}
+$$
 
 where $(\mathbf{Q}_t, \mathbf{K}_t, \mathbf{V}_t)$ are computed with frozen LLM weights for text tokens, and $(\mathbf{Q}_v, \mathbf{K}_v, \mathbf{V}_v)$ are computed with trainable visual expert weights for visual tokens. A final MLP adapter (SwiGLU, 2-layer) projects EVA2-CLIP-E features into the LLM's token space before entering the first block.
 
@@ -632,7 +668,9 @@ Thermal ─┤──> Thermal Encoder (ViT)                │
 
 ImageBind avoids the need for any dataset where all six modalities are simultaneously paired. Instead, it trains each non-image modality $M$ with the image modality as the anchor:
 
-$$\mathcal{L}_{total} = \sum_{M \in \{\text{text, audio, depth, thermal, IMU}\}} \mathcal{L}_{InfoNCE}(E_{img}(\mathbf{I}), E_M(\mathbf{m}))$$
+$$
+\mathcal{L}_{total} = \sum_{M \in \{\text{text, audio, depth, thermal, IMU}\}} \mathcal{L}_{InfoNCE}(E_{img}(\mathbf{I}), E_M(\mathbf{m}))
+$$
 
 This works because of **emergent alignment**: if audio is aligned to images, and text is aligned to images, then audio and text are implicitly aligned to each other — even though the model never saw direct audio-text pairs. This enables downstream zero-shot tasks such as:
 - **Audio-driven visual search:** Find the image that sounds like a given audio clip.
@@ -869,7 +907,9 @@ After SFT, models may exhibit hallucinations, verbosity, or subtle factual error
 - **RLHF (Reinforcement Learning from Human Feedback):** A reward model $r_\phi$ trained on human preference pairs $(y^+, y^-)$ scores model outputs. PPO updates the SFT model to maximize $r_\phi$ while minimizing KL divergence from the SFT policy.
 - **DPO (Direct Preference Optimization):** Directly optimizes the preference objective without a separate reward model, treating the language model itself as an implicit reward:
 
-$$\mathcal{L}_{DPO} = -\mathbb{E}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y^+ | x)}{\pi_{ref}(y^+ | x)} - \beta \log \frac{\pi_\theta(y^- | x)}{\pi_{ref}(y^- | x)}\right)\right]$$
+$$
+\mathcal{L}_{DPO} = -\mathbb{E}\left[\log \sigma\left(\beta \log \frac{\pi_\theta(y^+ | x)}{\pi_{ref}(y^+ | x)} - \beta \log \frac{\pi_\theta(y^- | x)}{\pi_{ref}(y^- | x)}\right)\right]
+$$
 
 For multimodal models, preference pairs are typically constructed as $x = (\text{image}, \text{question})$, $y^+ = \text{accurate, grounded answer}$, $y^- = \text{hallucinated or incorrect answer}$.
 
@@ -955,7 +995,9 @@ model = AutoModelForCausalLM.from_pretrained(
 
 LoRA (Hu et al., 2022) decomposes weight updates into low-rank matrices:
 
-$$\mathbf{W}' = \mathbf{W}_0 + \Delta\mathbf{W} = \mathbf{W}_0 + \frac{\alpha}{r}\mathbf{B}\mathbf{A}$$
+$$
+\mathbf{W}' = \mathbf{W}_0 + \Delta\mathbf{W} = \mathbf{W}_0 + \frac{\alpha}{r}\mathbf{B}\mathbf{A}
+$$
 
 where $\mathbf{W}_0 \in \mathbb{R}^{d_{out} \times d_{in}}$ is the frozen pre-trained weight, $\mathbf{A} \in \mathbb{R}^{r \times d_{in}}$ and $\mathbf{B} \in \mathbb{R}^{d_{out} \times r}$ are trainable with rank $r \ll \min(d_{in}, d_{out})$, and $\alpha$ is a scaling hyperparameter.
 
@@ -1087,7 +1129,9 @@ graph TD
 
 The Visual Question Answering benchmark (Goyal et al., 2017) provides 1.1M question-answer pairs over ~200K COCO images. Each question has 10 human-annotated answers, and accuracy is computed as:
 
-$$\text{VQA Accuracy} = \min\!\left(\frac{\text{count of matching human answers}}{3}, 1\right)$$
+$$
+\text{VQA Accuracy} = \min\!\left(\frac{\text{count of matching human answers}}{3}, 1\right)
+$$
 
 This soft accuracy metric rewards common answers even if not all annotators agreed. **Limitation:** VQA-v2 questions are often answerable from language statistics alone (e.g., "What color is the sky?" → "blue"), limiting its ability to distinguish vision-grounded from language-prior-dependent models.
 
@@ -1139,9 +1183,13 @@ POPE scores are computed as standard F1, precision, and recall. The gap between 
 
 CHAIR (Rohrbach et al., 2018) evaluates free-form captions by computing what fraction of mentioned objects do not appear in the ground-truth COCO annotation:
 
-$$\text{CHAIR}_I = \frac{|\{\text{hallucinated objects}\}|}{|\{\text{all mentioned objects}\}|}$$
+$$
+\text{CHAIR}_I = \frac{|\{\text{hallucinated objects}\}|}{|\{\text{all mentioned objects}\}|}
+$$
 
-$$\text{CHAIR}_S = \frac{|\{\text{captions with hallucinations}\}|}{|\{\text{all captions}\}|}$$
+$$
+\text{CHAIR}_S = \frac{|\{\text{captions with hallucinations}\}|}{|\{\text{all captions}\}|}
+$$
 
 Lower is better. A well-calibrated model should have $\text{CHAIR}_I < 5\%$.
 
@@ -1160,7 +1208,9 @@ MMHal-Bench extends hallucination evaluation beyond binary object presence to mo
 
 Referring Expression Comprehension: given a natural language description ("the woman in the red jacket"), locate the referred object in the image by predicting a bounding box. Evaluated as:
 
-$$\text{Accuracy} = \frac{|\{\text{predictions with } IoU(pred, gt) \geq 0.5\}|}{|\{\text{total examples}\}|}$$
+$$
+\text{Accuracy} = \frac{|\{\text{predictions with } IoU(pred, gt) \geq 0.5\}|}{|\{\text{total examples}\}|}
+$$
 
 RefCOCO uses short, positional expressions; RefCOCO+ bans location words to test attribute-based grounding; RefCOCO-g uses longer, more complex descriptions.
 
@@ -1195,7 +1245,9 @@ MathVista (Lu et al., 2023) is a composite benchmark of 6,141 mathematical probl
 - **Detail:** Completeness of visual description.
 - **Reasoning:** Depth of causal/inferential analysis.
 
-$$\text{Relative Score} = \frac{\text{Model Score}}{\text{GPT-4V Score}} \times 100$$
+$$
+\text{Relative Score} = \frac{\text{Model Score}}{\text{GPT-4V Score}} \times 100
+$$
 
 A score of 100 indicates GPT-4V parity.
 

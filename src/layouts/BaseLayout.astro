@@ -82,9 +82,38 @@ const siteTitle = title === "Subhendu's Blog" ? title : `${title} | Subhendu's B
           inlineMath: [['$', '$'], ['\\(', '\\)']],
           displayMath: [['$$', '$$'], ['\\[', '\\]']]
         },
+        startup: { typeset: false },
         options: {
-          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
         }
+      };
+
+      // Typeset math nodes emitted by remark-math (delimiters are stripped,
+      // so raw TeX is preserved verbatim inside <code class="language-math">).
+      function typesetMathNodes() {
+        const nodes = document.querySelectorAll('code.language-math');
+        if (nodes.length > 0) {
+          for (const node of nodes) {
+            const tex = node.textContent;
+            const display = node.classList.contains('math-display');
+            try {
+              const rendered = window.MathJax.tex2chtml(tex, { display: display });
+              node.innerHTML = '';
+              node.appendChild(rendered);
+            } catch (err) {
+              console.error('MathJax render error:', err, tex);
+            }
+          }
+          document.head.appendChild(window.MathJax.chtmlStylesheet());
+        }
+        // Fallback: typeset any residual delimiter-based ($...$$) math.
+        window.MathJax.typesetPromise();
+      }
+
+      window.MathJax.startup = window.MathJax.startup || {};
+      window.MathJax.startup.ready = function() {
+        window.MathJax.startup.defaultReady();
+        window.MathJax.startup.promise.then(typesetMathNodes);
       };
     </script>
     <script is:inline id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
