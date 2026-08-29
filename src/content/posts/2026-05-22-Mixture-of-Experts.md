@@ -26,6 +26,14 @@ This report covers mathematical, algorithmic, and systems-level breakthroughs in
 
 Mixture of Experts (MoE) architecture represents a pivotal paradigm shift in deep learning. Traditional neural networks operate under a **dense compute paradigm**, where every parameter in the model is activated for every input token. In contrast, MoE introduces the **sparse compute paradigm** via conditional computation, decoupling the parameter capacity of a network from its computational budget per forward pass.
 
+> In modern Large Language Models (LLMs), MoE is specifically applied to cut down active parameters in the **Multi-Layer Perceptron (MLP / Feed-Forward)** blocks. In standard Transformer architectures, the parameter budget per layer is heavily skewed toward the MLP sub-layers rather than the Multi-Head Attention (MHA/GQA) mechanisms. 
+
+In a classic Transformer layer with hidden dimension $d_{\text{model}}$ and intermediate FFN dimension $d_{\text{ff}} = 4d_{\text{model}}$, the self-attention projections ($W_Q, W_K, W_V, W_O$) account for $4d_{\text{model}}^2$ parameters, whereas the two-layer MLP ($W_1, W_2$) accounts for $2 \cdot d_{\text{model}} \cdot 4d_{\text{model}} = 8d_{\text{model}}^2$ parameters—representing **two-thirds ($\approx 66.7\%$) of the entire layer's parameter footprint**. 
+
+In contemporary LLMs adopting gated activations like SwiGLU (e.g., LLaMA, Mistral, DeepSeek), which require three projection matrices ($W_{\text{gate}}, W_{\text{up}}, W_{\text{down}}$ with $d_{\text{ff}} \approx \frac{8}{3}d_{\text{model}}$), combined with Grouped-Query Attention (GQA), the MLP block accounts for **over $67\%\text{–}70\%$** of all parameters and per-token FLOPs. 
+
+> Because MLP layers primarily act as key-value associative memories for storing world knowledge and factual associations, routing tokens selectively through sparse expert MLPs while maintaining dense, shared attention blocks allows LLMs to scale their knowledge capacity exponentially without incurring prohibitive FLOP costs.
+
 This section details the historical context of conditional computation, mathematically analyzes the scaling dynamics of active vs. total parameters, formalizes the routing gating mechanisms, and unpacks the fundamental engineering and compiler-level orchestration strategies that make outrageously large neural networks viable on modern hardware clusters.
 
 ---
