@@ -377,8 +377,10 @@ $$
 
 where $\tau$ is a learnable log-temperature parameter (initialized to $\ln(1/0.07)$). The symmetric cross-entropy loss maximizes similarity for the $N$ matched diagonal pairs while pushing apart the $N(N-1)$ off-diagonal negative pairs:
 
-$$\mathcal{L}_{img} = -\frac{1}{N}\sum_{i=1}^N \log \frac{e^{\mathbf{S}_{i,i}}}{\sum_{j=1}^N e^{\mathbf{S}_{i,j}}}, \quad
-\mathcal{L}_{txt} = -\frac{1}{N}\sum_{j=1}^N \log \frac{e^{\mathbf{S}_{j,j}}}{\sum_{i=1}^N e^{\mathbf{S}_{i,j}}}$$
+$$
+\mathcal{L}_{img} = -\frac{1}{N}\sum_{i=1}^N \log \frac{e^{\mathbf{S}_{i,i}}}{\sum_{j=1}^N e^{\mathbf{S}_{i,j}}}, \quad
+\mathcal{L}_{txt} = -\frac{1}{N}\sum_{j=1}^N \log \frac{e^{\mathbf{S}_{j,j}}}{\sum_{i=1}^N e^{\mathbf{S}_{i,j}}}
+$$
 
 $$
 \mathcal{L}_{CLIP} = \frac{1}{2}\left(\mathcal{L}_{img} + \mathcal{L}_{txt}\right)

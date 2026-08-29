@@ -594,10 +594,12 @@ where $\epsilon \sim \mathcal{N}(0, 1)$ is standard Gaussian noise sampled dynam
 
 To enforce sparsity, the gating network applies the $\text{KeepTopK}$ operator, which retains only the $k$ highest logit components of $H(x)$ and sets all remaining components to $-\infty$:
 
-$$\text{KeepTopK}(v, k)_i = \begin{cases} 
+$$
+\text{KeepTopK}(v, k)_i = \begin{cases} 
       v_i & \text{if } v_i \text{ is in the top } k \text{ elements of } v, \\
       -\infty & \text{otherwise}
-   \end{cases} \quad \text{(Eq. 4)}$$
+   \end{cases} \quad \text{(Eq. 4)}
+$$
 
 The final sparse gating vector $G(x)$ is obtained by applying the standard softmax function to this pruned logit representation:
 
@@ -959,10 +961,12 @@ $$
 
 ### 3.2.4 Permutation Matrix Formulation
 The assignment indices are mapped to a three-dimensional one-hot permutation tensor $P \in \{0, 1\}^{e \times k \times n}$, defined as:
-$$P[i, j, l] = \begin{cases} 
+$$
+P[i, j, l] = \begin{cases} 
 1 & \text{if } I[i, j] = l \\ 
 0 & \text{otherwise} 
-\end{cases} \tag{4}$$
+\end{cases} \tag{4}
+$$
 
 ### 3.2.5 Dispatch / Permutation Operation
 Using the permutation tensor $P$, the input token representations $X$ are gathered and permuted into the expert input tensor $X_{in} \in \mathbb{R}^{e \times k \times d}$, where $X_{in}[i] \in \mathbb{R}^{k \times d}$ is the input matrix for expert $i$:
@@ -1868,7 +1872,9 @@ Under normalized sigmoid gating, the required linear independence on the routed 
 
 > **Definition 2 (Weak Identifiability).** A routed expert function $x \mapsto h_2(x, \eta)$ is weakly identifiable if it is differentiable with respect to $\eta$, and for any distinct parameters $\eta_1, \dots, \eta_{k_2}$, the following set of functions (in $x$) consists of linearly independent functions:
 >
-> $$\left\{ \frac{\partial h_2}{\partial \eta^{(u)}}(x, \eta_i) : i \in [k_2], u \in [d_2] \right\}$$
+> $$
+> \left\{ \frac{\partial h_2}{\partial \eta^{(u)}}(x, \eta_i) : i \in [k_2], u \in [d_2] \right\}
+> $$
 
 Crucially, **linear experts** $h_2(x, (\eta_1, \eta_0)) = \eta_1^T x + \eta_0$ **fully satisfy** weak identifiability, even though they violate strong identifiability.
 
