@@ -231,6 +231,7 @@ mjx-container {
   overflow-y: hidden;
   max-width: 100%;
   padding: 0.25rem 0;
+  font-size: 1.25rem;
 }
 
 /* remark-math output nodes (typeset by MathJax client-side) */

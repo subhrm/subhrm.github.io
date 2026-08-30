@@ -111,18 +111,6 @@ For instance, in **Mixtral 8x7B** ($E=8, K=2$), the model hosts **46.7B total pa
 
 ---
 
-### 1.3 Evolution of Modern Sparsity
-
-```mermaid
-graph LR
-    A["Sparsely-Gated MoE<br>(Shazeer et al. 2017)<br><i>Noisy Top-K, LSTMs</i>"] --> B["GShard<br>(Lepikhin et al. 2020)<br><i>Top-2, SPMD Partitioning</i>"]
-    B --> C["Switch Transformer<br>(Fedus et al. 2021)<br><i>Top-1 Routing, Stability</i>"]
-    C --> D["Mixtral 8x7B<br>(Mistral AI 2024)<br><i>Top-2 SwiGLU, Open Weights</i>"]
-    D --> E["DeepSeekMoE & V3<br>(DeepSeek 2024-2025)<br><i>Shared Experts + Sigmoid Gating</i>"]
-```
-
----
-
 # 2. Core Routing Mechanics & Mathematical Formulations
 
 An MoE layer consists of two components:
@@ -164,7 +152,7 @@ An MoE layer consists of two components:
 
 ### 2.1 Token-Choice Top-$K$ Routing (Softmax Gating)
 
-Used by GShard, ST-MoE, and Mixtral 8x7B, **Token-Choice Top-$K$** evaluates the gating logits for token $x \in \mathbb{R}^{d_{\text{model}}}$ across all $E$ experts:
+Used by most moderm LLMs, the **Token-Choice Top-$K$** technique evaluates the gating logits for each token $x \in \mathbb{R}^{d_{\text{model}}}$ across all $E$ experts:
 
 $$
 h(x) = x \cdot W_g \quad \text{where } W_g \in \mathbb{R}^{d_{\text{model}} \times E}
