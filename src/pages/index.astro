@@ -19,7 +19,7 @@ function getPostUrl(post: typeof posts[0]) {
     ? post.data.categories[0]
     : (post.data.categories || 'post');
 
-  return `/${category}/${year}/${month}/${day}/${slug}.html`;
+  return `/${category}/${year}/${month}/${day}/${slug}/`;
 }
 
 function formatDate(date: Date) {

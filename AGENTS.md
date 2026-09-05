@@ -42,7 +42,7 @@ This document provides context, architectural guidelines, and development workfl
 │   ├── styles/
 │   │   └── global.css              # Tailwind v4 import, typography & prose
 │   └── content.config.ts           # Astro 5/7 content collections & Zod schema
-├── astro.config.mjs                # Astro configuration & route mirror hook
+├── astro.config.mjs                # Astro configuration (directory format & trailing slash)
 ├── package.json                    # Project dependencies and scripts
 └── tsconfig.json                   # TypeScript configuration
 ```
@@ -73,10 +73,10 @@ tags: []                        # Optional array of tags
 
 ## 4. Key Architectural Features
 
-### Backward-Compatible Permalinks
-To avoid breaking external links from the previous Jekyll setup:
-- Routes generate `/:category/:year/:month/:day/:slug.html` (e.g. `/llm/2026/05/22/Mixture-of-Experts.html`).
-- The `mirrorPages` integration in `astro.config.mjs` also generates directory index files (e.g. `/llm/2026/05/22/Mixture-of-Experts/index.html`) so both `.html` and trailing slash URLs work.
+### Clean URL Permalinks
+- Post routes generate modern clean directory-based URLs `/:category/:year/:month/:day/:slug/` (compiled as `dist/:category/:year/:month/:day/:slug/index.html`).
+- Astro is configured with `build.format: 'directory'` and `trailingSlash: 'always'` in `astro.config.mjs`.
+- Internal links across the site and RSS item links (`src/pages/feed.xml.ts`) point directly to clean URLs with trailing slashes.
 
 ### LaTeX Math Support
 - Math formulas are handled via MathJax 3 in `BaseLayout.astro`.
@@ -112,5 +112,5 @@ npm run preview
 ## 6. Guidelines for Agents
 
 1. **Do not remove MathJax or Mermaid scripts** from `BaseLayout.astro` as long-form technical reports rely on them.
-2. **Preserve post URL structure** (`/:category/:year/:month/:day/:slug.html`) when creating or modifying post routing.
+2. **Preserve clean post URL structure** (`/:category/:year/:month/:day/:slug/`) when creating or modifying post routing or RSS feeds.
 3. **Always run `npm run build`** after making structural or schema changes to ensure static compilation succeeds with 0 errors.
